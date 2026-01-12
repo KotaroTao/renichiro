@@ -6,598 +6,406 @@
 <title>3D Wireframe Athletic Game</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body {
-    overflow: hidden;
-    background: #000;
-    font-family: Arial, sans-serif;
-}
-#canvas {
-    display: block;
-    cursor: crosshair;
-}
-#ui {
-    position: fixed;
-    top: 20px;
-    left: 20px;
-    color: #0f0;
-    font-size: 14px;
-    text-shadow: 0 0 5px #0f0;
-    pointer-events: none;
-}
-#crosshair {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    color: #0f0;
-    font-size: 24px;
-    pointer-events: none;
-}
-#instructions {
-    position: fixed;
-    bottom: 20px;
-    left: 20px;
-    color: #0f0;
-    font-size: 12px;
-    opacity: 0.7;
-}
-#message {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    color: #0f0;
-    font-size: 24px;
-    text-align: center;
-    display: none;
-}
+body { overflow: hidden; background: #000; font-family: Arial, sans-serif; }
+#canvas { display: block; cursor: crosshair; }
+#ui { position: fixed; top: 20px; left: 20px; color: #0f0; font-size: 14px; text-shadow: 0 0 5px #0f0; pointer-events: none; }
+#crosshair { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #0f0; font-size: 24px; pointer-events: none; }
+#instructions { position: fixed; bottom: 20px; left: 20px; color: #0f0; font-size: 12px; opacity: 0.7; }
+#message { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #0f0; font-size: 24px; text-align: center; display: none; }
+#death { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #f00; font-size: 32px; text-align: center; display: none; text-shadow: 0 0 10px #f00; }
 </style>
 </head>
 <body>
 <canvas id="canvas"></canvas>
 <div id="ui">
-    <div>Position: <span id="pos">0, 0, 0</span></div>
-    <div>Speed: <span id="speed">0</span></div>
+    <div>Stage: <span id="stage">1</span></div>
     <div>Checkpoint: <span id="checkpoint">0</span> / <span id="total">0</span></div>
+    <div>Deaths: <span id="deaths">0</span></div>
 </div>
 <div id="crosshair">+</div>
-<div id="instructions">
-    WASD: Move | SPACE: Jump | MOUSE: Look | CLICK: Lock cursor
-</div>
+<div id="instructions">WASD: Move | SPACE: Jump | MOUSE: Look | CLICK: Lock cursor | RED = DEATH</div>
 <div id="message"></div>
+<div id="death">DEATH!</div>
 
 <script>
 var canvas = document.getElementById('canvas');
 var ctx = canvas.getContext('2d');
-
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 
-// Player state
-var player = {
-    x: 0,
-    y: 2,
-    z: 0,
-    vx: 0,
-    vy: 0,
-    vz: 0,
-    yaw: 0,
-    pitch: 0,
-    onGround: false,
-    checkpoint: 0
-};
+var player = { x: 0, y: 2, z: 0, vx: 0, vy: 0, vz: 0, yaw: 0, pitch: 0, onGround: false, checkpoint: 0, deaths: 0 };
+var gravity = -0.012;
+var jumpForce = 0.28;
+var moveSpeed = 0.08;
+var friction = 0.88;
+var airControl = 0.25;
 
-// Physics
-var gravity = -0.015;
-var jumpForce = 0.35;
-var moveSpeed = 0.15;
-var friction = 0.85;
-var airControl = 0.3;
+var keys = {}, mouseLocked = false;
+var platforms = [], obstacles = [], checkpoints = [], goal = null;
+var currentStage = 1;
+var maxStage = 3;
 
-// Input state
-var keys = {};
-var mouseLocked = false;
-
-// Platforms and obstacles
-var platforms = [];
-var checkpoints = [];
-var goal = null;
-
-// Generate level
 function generateLevel() {
     platforms = [];
+    obstacles = [];
     checkpoints = [];
 
-    // Starting platform
-    platforms.push({ x: 0, y: 0, z: 0, w: 6, h: 1, d: 6, color: '#0f0' });
+    if (currentStage === 1) {
+        // Stage 1 - Basic
+        platforms.push({ x: 0, y: 0, z: 0, w: 6, h: 1, d: 6, color: '#0f0' });
+        var course = [
+            { x: 0, y: 0, z: 10, w: 4, h: 1, d: 4 },
+            { x: 5, y: 1, z: 15, w: 3, h: 1, d: 3 },
+            { x: 10, y: 2, z: 15, w: 3, h: 1, d: 3 },
+            { x: 15, y: 3, z: 12, w: 3, h: 1, d: 3 },
+            { x: 15, y: 4, z: 6, w: 3, h: 1, d: 3 },
+            { x: 12, y: 5, z: 0, w: 3, h: 1, d: 3 },
+            { x: 6, y: 6, z: -3, w: 3, h: 1, d: 3 },
+            { x: 0, y: 7, z: -6, w: 5, h: 1, d: 5 }
+        ];
+        for (var i = 0; i < course.length; i++) {
+            platforms.push({ x: course[i].x, y: course[i].y, z: course[i].z, w: course[i].w, h: course[i].h, d: course[i].d, color: '#0a0' });
+        }
+        // Obstacles
+        obstacles.push({ x: 7, y: 1.5, z: 15, w: 1, h: 2, d: 1 });
+        obstacles.push({ x: 15, y: 4.5, z: 9, w: 1, h: 2, d: 1 });
 
-    // Platform sequence - parkour course
-    var course = [
-        { x: 0, y: 0, z: 10, w: 4, h: 1, d: 4 },
-        { x: 5, y: 1, z: 15, w: 3, h: 1, d: 3 },
-        { x: 10, y: 2, z: 15, w: 3, h: 1, d: 3 },
-        { x: 15, y: 3, z: 12, w: 3, h: 1, d: 3 },
-        { x: 15, y: 4, z: 6, w: 3, h: 1, d: 3 },
-        { x: 12, y: 5, z: 0, w: 3, h: 1, d: 3 },
-        { x: 6, y: 6, z: -3, w: 3, h: 1, d: 3 },
-        { x: 0, y: 7, z: -6, w: 3, h: 1, d: 3 },
-        { x: -6, y: 8, z: -6, w: 3, h: 1, d: 3 },
-        { x: -10, y: 9, z: -3, w: 3, h: 1, d: 3 },
-        { x: -10, y: 10, z: 3, w: 3, h: 1, d: 3 },
-        { x: -6, y: 11, z: 8, w: 3, h: 1, d: 3 },
-        { x: 0, y: 12, z: 12, w: 4, h: 1, d: 4 },
-    ];
-
-    for (var i = 0; i < course.length; i++) {
-        var p = course[i];
-        platforms.push({
-            x: p.x, y: p.y, z: p.z,
-            w: p.w, h: p.h, d: p.d,
-            color: '#0a0'
-        });
+        checkpoints = [
+            { x: 15, y: 4.5, z: 6, reached: false },
+            { x: 0, y: 8, z: -6, reached: false }
+        ];
+        goal = { x: 0, y: 9, z: -6 };
     }
+    else if (currentStage === 2) {
+        // Stage 2 - Harder with more obstacles
+        platforms.push({ x: 0, y: 0, z: 0, w: 6, h: 1, d: 6, color: '#0f0' });
+        var course = [
+            { x: 0, y: 1, z: 8, w: 3, h: 1, d: 3 },
+            { x: -5, y: 2, z: 12, w: 3, h: 1, d: 3 },
+            { x: -10, y: 3, z: 12, w: 3, h: 1, d: 3 },
+            { x: -15, y: 4, z: 8, w: 3, h: 1, d: 3 },
+            { x: -15, y: 5, z: 2, w: 3, h: 1, d: 3 },
+            { x: -12, y: 6, z: -4, w: 3, h: 1, d: 3 },
+            { x: -8, y: 7, z: -8, w: 3, h: 1, d: 3 },
+            { x: -3, y: 8, z: -10, w: 3, h: 1, d: 3 },
+            { x: 3, y: 9, z: -10, w: 3, h: 1, d: 3 },
+            { x: 8, y: 10, z: -8, w: 3, h: 1, d: 3 },
+            { x: 10, y: 11, z: -3, w: 3, h: 1, d: 3 },
+            { x: 8, y: 12, z: 3, w: 5, h: 1, d: 5 }
+        ];
+        for (var i = 0; i < course.length; i++) {
+            platforms.push({ x: course[i].x, y: course[i].y, z: course[i].z, w: course[i].w, h: course[i].h, d: course[i].d, color: '#0a0' });
+        }
+        // More obstacles
+        obstacles.push({ x: -7, y: 2.5, z: 12, w: 1.5, h: 2, d: 1.5 });
+        obstacles.push({ x: -15, y: 5.5, z: 5, w: 1, h: 2, d: 1 });
+        obstacles.push({ x: -10, y: 7, z: -6, w: 1, h: 2, d: 1 });
+        obstacles.push({ x: 0, y: 8.5, z: -10, w: 1.5, h: 2, d: 1.5 });
+        obstacles.push({ x: 10, y: 11.5, z: -5, w: 1, h: 2, d: 1 });
 
-    // Checkpoints
-    checkpoints = [
-        { x: 15, y: 4.5, z: 6, reached: false },
-        { x: -10, y: 10.5, z: 3, reached: false },
-        { x: 0, y: 13, z: 12, reached: false }
-    ];
+        checkpoints = [
+            { x: -15, y: 5.5, z: 2, reached: false },
+            { x: 3, y: 9.5, z: -10, reached: false },
+            { x: 8, y: 13, z: 3, reached: false }
+        ];
+        goal = { x: 8, y: 14, z: 3 };
+    }
+    else if (currentStage === 3) {
+        // Stage 3 - Expert with narrow platforms and many obstacles
+        platforms.push({ x: 0, y: 0, z: 0, w: 6, h: 1, d: 6, color: '#0f0' });
+        var course = [
+            { x: 0, y: 1, z: 6, w: 2, h: 1, d: 2 },
+            { x: 0, y: 2, z: 11, w: 2, h: 1, d: 2 },
+            { x: 4, y: 3, z: 14, w: 2, h: 1, d: 2 },
+            { x: 8, y: 4, z: 14, w: 2, h: 1, d: 2 },
+            { x: 12, y: 5, z: 11, w: 2, h: 1, d: 2 },
+            { x: 12, y: 6, z: 6, w: 2, h: 1, d: 2 },
+            { x: 12, y: 7, z: 1, w: 2, h: 1, d: 2 },
+            { x: 8, y: 8, z: -2, w: 2, h: 1, d: 2 },
+            { x: 4, y: 9, z: -2, w: 2, h: 1, d: 2 },
+            { x: 0, y: 10, z: -5, w: 2, h: 1, d: 2 },
+            { x: -4, y: 11, z: -5, w: 2, h: 1, d: 2 },
+            { x: -8, y: 12, z: -2, w: 2, h: 1, d: 2 },
+            { x: -8, y: 13, z: 3, w: 2, h: 1, d: 2 },
+            { x: -8, y: 14, z: 8, w: 2, h: 1, d: 2 },
+            { x: -4, y: 15, z: 12, w: 2, h: 1, d: 2 },
+            { x: 0, y: 16, z: 15, w: 4, h: 1, d: 4 }
+        ];
+        for (var i = 0; i < course.length; i++) {
+            platforms.push({ x: course[i].x, y: course[i].y, z: course[i].z, w: course[i].w, h: course[i].h, d: course[i].d, color: '#0a0' });
+        }
+        // Many obstacles
+        obstacles.push({ x: 0, y: 1.5, z: 8, w: 0.8, h: 1.5, d: 0.8 });
+        obstacles.push({ x: 2, y: 3, z: 14, w: 0.8, h: 1.5, d: 0.8 });
+        obstacles.push({ x: 10, y: 4.5, z: 12, w: 0.8, h: 1.5, d: 0.8 });
+        obstacles.push({ x: 12, y: 6.5, z: 3, w: 0.8, h: 1.5, d: 0.8 });
+        obstacles.push({ x: 6, y: 8.5, z: -2, w: 0.8, h: 1.5, d: 0.8 });
+        obstacles.push({ x: 2, y: 9.5, z: -3, w: 0.8, h: 1.5, d: 0.8 });
+        obstacles.push({ x: -6, y: 11.5, z: -3, w: 0.8, h: 1.5, d: 0.8 });
+        obstacles.push({ x: -8, y: 13.5, z: 5, w: 0.8, h: 1.5, d: 0.8 });
+        obstacles.push({ x: -6, y: 15, z: 10, w: 0.8, h: 1.5, d: 0.8 });
 
-    // Goal
-    goal = { x: 0, y: 14, z: 12 };
+        checkpoints = [
+            { x: 12, y: 7.5, z: 1, reached: false },
+            { x: -8, y: 13.5, z: 3, reached: false },
+            { x: 0, y: 17, z: 15, reached: false }
+        ];
+        goal = { x: 0, y: 18, z: 15 };
+    }
 
     document.getElementById('total').textContent = checkpoints.length;
+    document.getElementById('stage').textContent = currentStage;
 }
 
-// Get box vertices
 function getBoxVertices(box) {
-    var x = box.x, y = box.y, z = box.z;
-    var w = box.w / 2, h = box.h / 2, d = box.d / 2;
-    return [
-        [x - w, y - h, z - d],
-        [x + w, y - h, z - d],
-        [x + w, y + h, z - d],
-        [x - w, y + h, z - d],
-        [x - w, y - h, z + d],
-        [x + w, y - h, z + d],
-        [x + w, y + h, z + d],
-        [x - w, y + h, z + d]
-    ];
+    var x = box.x, y = box.y, z = box.z, w = box.w/2, h = box.h/2, d = box.d/2;
+    return [[x-w,y-h,z-d],[x+w,y-h,z-d],[x+w,y+h,z-d],[x-w,y+h,z-d],[x-w,y-h,z+d],[x+w,y-h,z+d],[x+w,y+h,z+d],[x-w,y+h,z+d]];
+}
+var boxEdges = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+
+function worldToCamera(p) {
+    var dx = p[0]-player.x, dy = p[1]-player.y, dz = p[2]-player.z;
+    var cy = Math.cos(-player.yaw), sy = Math.sin(-player.yaw);
+    var cp = Math.cos(-player.pitch), sp = Math.sin(-player.pitch);
+    var x1 = dx*cy - dz*sy, z1 = dx*sy + dz*cy;
+    return [x1, dy*cp - z1*sp, dy*sp + z1*cp];
 }
 
-var boxEdges = [
-    [0,1], [1,2], [2,3], [3,0],
-    [4,5], [5,6], [6,7], [7,4],
-    [0,4], [1,5], [2,6], [3,7]
-];
-
-// Transform point to camera space
-function worldToCamera(point) {
-    var dx = point[0] - player.x;
-    var dy = point[1] - player.y;
-    var dz = point[2] - player.z;
-
-    var cosYaw = Math.cos(-player.yaw);
-    var sinYaw = Math.sin(-player.yaw);
-    var cosPitch = Math.cos(-player.pitch);
-    var sinPitch = Math.sin(-player.pitch);
-
-    var x1 = dx * cosYaw - dz * sinYaw;
-    var z1 = dx * sinYaw + dz * cosYaw;
-    var y1 = dy * cosPitch - z1 * sinPitch;
-    var z2 = dy * sinPitch + z1 * cosPitch;
-
-    return [x1, y1, z2];
+function project(c) {
+    if (c[2] < 0.1) return null;
+    var f = 500/c[2];
+    return { x: c[0]*f + canvas.width/2, y: -c[1]*f + canvas.height/2, z: c[2] };
 }
 
-// Project to screen
-function project(camPoint) {
-    var fov = 500;
-    var z = camPoint[2];
-    if (z < 0.1) return null;
-
-    var factor = fov / z;
-    return {
-        x: camPoint[0] * factor + canvas.width / 2,
-        y: -camPoint[1] * factor + canvas.height / 2,
-        z: z
-    };
-}
-
-// Clip line to near plane
 function clipLine(p1, p2) {
-    var near = 0.1;
-    if (p1[2] >= near && p2[2] >= near) return [p1, p2];
-    if (p1[2] < near && p2[2] < near) return null;
-
-    var t = (near - p1[2]) / (p2[2] - p1[2]);
-    var clipped = [
-        p1[0] + t * (p2[0] - p1[0]),
-        p1[1] + t * (p2[1] - p1[1]),
-        near
-    ];
-
-    if (p1[2] < near) return [clipped, p2];
-    return [p1, clipped];
+    var n = 0.1;
+    if (p1[2] >= n && p2[2] >= n) return [p1, p2];
+    if (p1[2] < n && p2[2] < n) return null;
+    var t = (n - p1[2]) / (p2[2] - p1[2]);
+    var c = [p1[0]+t*(p2[0]-p1[0]), p1[1]+t*(p2[1]-p1[1]), n];
+    return p1[2] < n ? [c, p2] : [p1, c];
 }
 
-// Draw wireframe box
-function drawBox(box) {
-    var verts = getBoxVertices(box);
-    var camVerts = verts.map(worldToCamera);
-
-    ctx.strokeStyle = box.color || '#0f0';
+function drawBox(box, color) {
+    var v = getBoxVertices(box).map(worldToCamera);
+    ctx.strokeStyle = color || box.color || '#0f0';
     ctx.lineWidth = 1;
-
     for (var i = 0; i < boxEdges.length; i++) {
-        var e = boxEdges[i];
-        var clipped = clipLine(camVerts[e[0]], camVerts[e[1]]);
-        if (!clipped) continue;
-
-        var p1 = project(clipped[0]);
-        var p2 = project(clipped[1]);
+        var cl = clipLine(v[boxEdges[i][0]], v[boxEdges[i][1]]);
+        if (!cl) continue;
+        var p1 = project(cl[0]), p2 = project(cl[1]);
         if (!p1 || !p2) continue;
-
-        ctx.beginPath();
-        ctx.moveTo(p1.x, p1.y);
-        ctx.lineTo(p2.x, p2.y);
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
     }
 }
 
-// Draw checkpoint ring
 function drawCheckpoint(cp) {
-    var segments = 16;
-    var radius = 1.5;
-    var points = [];
-
-    for (var i = 0; i <= segments; i++) {
-        var angle = (i / segments) * Math.PI * 2;
-        points.push([
-            cp.x + Math.cos(angle) * radius,
-            cp.y,
-            cp.z + Math.sin(angle) * radius
-        ]);
+    var pts = [];
+    for (var i = 0; i <= 16; i++) {
+        var a = (i/16)*Math.PI*2;
+        pts.push([cp.x+Math.cos(a)*1.5, cp.y, cp.z+Math.sin(a)*1.5]);
     }
-
-    var camPoints = points.map(worldToCamera);
+    var cam = pts.map(worldToCamera);
     ctx.strokeStyle = cp.reached ? '#ff0' : '#f0f';
     ctx.lineWidth = 2;
-
     ctx.beginPath();
-    var started = false;
-    for (var i = 0; i < camPoints.length - 1; i++) {
-        var clipped = clipLine(camPoints[i], camPoints[i + 1]);
-        if (!clipped) continue;
-
-        var p1 = project(clipped[0]);
-        var p2 = project(clipped[1]);
+    var st = false;
+    for (var i = 0; i < cam.length-1; i++) {
+        var cl = clipLine(cam[i], cam[i+1]);
+        if (!cl) continue;
+        var p1 = project(cl[0]), p2 = project(cl[1]);
         if (!p1 || !p2) continue;
-
-        if (!started) {
-            ctx.moveTo(p1.x, p1.y);
-            started = true;
-        }
+        if (!st) { ctx.moveTo(p1.x, p1.y); st = true; }
         ctx.lineTo(p2.x, p2.y);
     }
     ctx.stroke();
 }
 
-// Draw goal
 function drawGoal() {
     if (!goal) return;
-
-    var size = 2;
+    var pts = [];
+    for (var i = 0; i < 10; i++) {
+        var a = (i/10)*Math.PI*2 - Math.PI/2, r = (i%2===0) ? 2 : 1;
+        pts.push([goal.x+Math.cos(a)*r, goal.y+Math.sin(a)*r, goal.z]);
+    }
+    pts.push(pts[0]);
+    var cam = pts.map(worldToCamera);
     ctx.strokeStyle = '#ff0';
     ctx.lineWidth = 3;
-
-    // Draw star shape
-    var points = [];
-    for (var i = 0; i < 10; i++) {
-        var angle = (i / 10) * Math.PI * 2 - Math.PI / 2;
-        var r = (i % 2 === 0) ? size : size * 0.5;
-        points.push([
-            goal.x + Math.cos(angle) * r,
-            goal.y + Math.sin(angle) * r,
-            goal.z
-        ]);
-    }
-    points.push(points[0]);
-
-    var camPoints = points.map(worldToCamera);
     ctx.beginPath();
-    var started = false;
-    for (var i = 0; i < camPoints.length - 1; i++) {
-        var clipped = clipLine(camPoints[i], camPoints[i + 1]);
-        if (!clipped) continue;
-
-        var p1 = project(clipped[0]);
-        var p2 = project(clipped[1]);
+    var st = false;
+    for (var i = 0; i < cam.length-1; i++) {
+        var cl = clipLine(cam[i], cam[i+1]);
+        if (!cl) continue;
+        var p1 = project(cl[0]), p2 = project(cl[1]);
         if (!p1 || !p2) continue;
-
-        if (!started) {
-            ctx.moveTo(p1.x, p1.y);
-            started = true;
-        }
+        if (!st) { ctx.moveTo(p1.x, p1.y); st = true; }
         ctx.lineTo(p2.x, p2.y);
     }
     ctx.stroke();
 }
 
-// Check collision with platform
-function checkPlatformCollision(px, py, pz, platform) {
-    var hw = platform.w / 2;
-    var hh = platform.h / 2;
-    var hd = platform.d / 2;
-
-    return px >= platform.x - hw - 0.3 &&
-           px <= platform.x + hw + 0.3 &&
-           py >= platform.y - hh &&
-           py <= platform.y + hh + 1.8 &&
-           pz >= platform.z - hd - 0.3 &&
-           pz <= platform.z + hd + 0.3;
+function checkObstacleCollision() {
+    for (var i = 0; i < obstacles.length; i++) {
+        var o = obstacles[i];
+        var hw = o.w/2 + 0.3, hh = o.h/2, hd = o.d/2 + 0.3;
+        if (player.x >= o.x - hw && player.x <= o.x + hw &&
+            player.y >= o.y - hh && player.y <= o.y + hh + 1.5 &&
+            player.z >= o.z - hd && player.z <= o.z + hd) {
+            return true;
+        }
+    }
+    return false;
 }
 
-// Update physics
-function updatePhysics() {
-    // Movement input
-    var moveX = 0;
-    var moveZ = 0;
+function die() {
+    player.deaths++;
+    document.getElementById('deaths').textContent = player.deaths;
+    document.getElementById('death').style.display = 'block';
+    setTimeout(function() {
+        document.getElementById('death').style.display = 'none';
+        respawn();
+    }, 1000);
+}
 
+function updatePhysics() {
+    var moveX = 0, moveZ = 0;
     if (keys['KeyW'] || keys['ArrowUp']) moveZ = 1;
     if (keys['KeyS'] || keys['ArrowDown']) moveZ = -1;
     if (keys['KeyA'] || keys['ArrowLeft']) moveX = -1;
     if (keys['KeyD'] || keys['ArrowRight']) moveX = 1;
 
-    // Calculate movement direction based on view direction
-    var cosYaw = Math.cos(player.yaw);
-    var sinYaw = Math.sin(player.yaw);
-
-    // Forward is (-sin, cos), Right is (cos, sin)
-    var forwardX = -sinYaw;
-    var forwardZ = cosYaw;
-    var rightX = cosYaw;
-    var rightZ = sinYaw;
-
+    var cosYaw = Math.cos(player.yaw), sinYaw = Math.sin(player.yaw);
+    var forwardX = -sinYaw, forwardZ = cosYaw;
+    var rightX = cosYaw, rightZ = sinYaw;
     var accelX = (moveX * rightX + moveZ * forwardX) * moveSpeed;
     var accelZ = (moveX * rightZ + moveZ * forwardZ) * moveSpeed;
 
     var control = player.onGround ? 1 : airControl;
     player.vx += accelX * control;
     player.vz += accelZ * control;
-
-    // Gravity
     player.vy += gravity;
 
-    // Jump
-    if ((keys['Space'] || keys['KeySpace']) && player.onGround) {
+    if (keys['Space'] && player.onGround) {
         player.vy = jumpForce;
         player.onGround = false;
     }
 
-    // Apply friction
     player.vx *= friction;
     player.vz *= friction;
 
-    // Update position
-    var newX = player.x + player.vx;
-    var newY = player.y + player.vy;
-    var newZ = player.z + player.vz;
-
-    // Check collision with platforms
+    var nx = player.x + player.vx, ny = player.y + player.vy, nz = player.z + player.vz;
     player.onGround = false;
 
     for (var i = 0; i < platforms.length; i++) {
         var p = platforms[i];
-        var hw = p.w / 2;
-        var hh = p.h / 2;
-        var hd = p.d / 2;
-
-        // Check if player is above platform
-        if (newX >= p.x - hw - 0.2 && newX <= p.x + hw + 0.2 &&
-            newZ >= p.z - hd - 0.2 && newZ <= p.z + hd + 0.2) {
-
-            var topY = p.y + hh;
-
-            // Landing on top
-            if (player.y >= topY && newY < topY + 1.8 && player.vy <= 0) {
-                newY = topY + 1.8;
+        var hw = p.w/2, hh = p.h/2, hd = p.d/2;
+        if (nx >= p.x-hw-0.2 && nx <= p.x+hw+0.2 && nz >= p.z-hd-0.2 && nz <= p.z+hd+0.2) {
+            var top = p.y + hh;
+            if (player.y >= top && ny < top+1.8 && player.vy <= 0) {
+                ny = top + 1.8;
                 player.vy = 0;
                 player.onGround = true;
             }
         }
     }
 
-    player.x = newX;
-    player.y = newY;
-    player.z = newZ;
+    player.x = nx; player.y = ny; player.z = nz;
 
-    // Respawn if fell
-    if (player.y < -20) {
-        respawn();
+    // Check obstacle collision
+    if (checkObstacleCollision()) {
+        die();
+        return;
     }
 
-    // Check checkpoints
+    if (player.y < -20) die();
+
     for (var i = 0; i < checkpoints.length; i++) {
-        var cp = checkpoints[i];
-        if (cp.reached) continue;
-
-        var dx = player.x - cp.x;
-        var dy = player.y - cp.y;
-        var dz = player.z - cp.z;
-        var dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-        if (dist < 2) {
-            cp.reached = true;
-            player.checkpoint = i + 1;
-            document.getElementById('checkpoint').textContent = player.checkpoint;
-        }
+        var c = checkpoints[i];
+        if (c.reached) continue;
+        var d = Math.sqrt((player.x-c.x)**2 + (player.y-c.y)**2 + (player.z-c.z)**2);
+        if (d < 2) { c.reached = true; player.checkpoint = i+1; document.getElementById('checkpoint').textContent = player.checkpoint; }
     }
 
-    // Check goal
     if (goal) {
-        var dx = player.x - goal.x;
-        var dy = player.y - goal.y;
-        var dz = player.z - goal.z;
-        var dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-        if (dist < 2 && checkpoints.every(function(c) { return c.reached; })) {
-            showMessage('GOAL! You Win!');
-            setTimeout(function() {
-                hideMessage();
-                resetGame();
-            }, 3000);
+        var d = Math.sqrt((player.x-goal.x)**2 + (player.y-goal.y)**2 + (player.z-goal.z)**2);
+        if (d < 2 && checkpoints.every(function(c){return c.reached;})) {
+            if (currentStage < maxStage) {
+                showMessage('Stage ' + currentStage + ' Clear!');
+                setTimeout(function() { hideMessage(); nextStage(); }, 2000);
+            } else {
+                showMessage('ALL STAGES CLEAR!\nCongratulations!');
+                setTimeout(function() { hideMessage(); currentStage = 1; resetGame(); }, 3000);
+            }
         }
     }
 }
 
 function respawn() {
-    // Find last checkpoint
-    var spawnX = 0, spawnY = 2, spawnZ = 0;
-
-    for (var i = checkpoints.length - 1; i >= 0; i--) {
-        if (checkpoints[i].reached) {
-            spawnX = checkpoints[i].x;
-            spawnY = checkpoints[i].y + 2;
-            spawnZ = checkpoints[i].z;
-            break;
-        }
+    var sx = 0, sy = 2, sz = 0;
+    for (var i = checkpoints.length-1; i >= 0; i--) {
+        if (checkpoints[i].reached) { sx = checkpoints[i].x; sy = checkpoints[i].y+2; sz = checkpoints[i].z; break; }
     }
-
-    player.x = spawnX;
-    player.y = spawnY;
-    player.z = spawnZ;
-    player.vx = 0;
-    player.vy = 0;
-    player.vz = 0;
+    player.x = sx; player.y = sy; player.z = sz;
+    player.vx = 0; player.vy = 0; player.vz = 0;
 }
 
-function resetGame() {
-    player.x = 0;
-    player.y = 2;
-    player.z = 0;
-    player.vx = 0;
-    player.vy = 0;
-    player.vz = 0;
+function nextStage() {
+    currentStage++;
+    player.x = 0; player.y = 2; player.z = 0;
+    player.vx = 0; player.vy = 0; player.vz = 0;
     player.checkpoint = 0;
-
-    for (var i = 0; i < checkpoints.length; i++) {
-        checkpoints[i].reached = false;
-    }
-
+    generateLevel();
     document.getElementById('checkpoint').textContent = '0';
 }
 
-function showMessage(text) {
-    var msg = document.getElementById('message');
-    msg.textContent = text;
-    msg.style.display = 'block';
+function resetGame() {
+    player.x = 0; player.y = 2; player.z = 0;
+    player.vx = 0; player.vy = 0; player.vz = 0;
+    player.checkpoint = 0;
+    player.deaths = 0;
+    for (var i = 0; i < checkpoints.length; i++) checkpoints[i].reached = false;
+    generateLevel();
+    document.getElementById('checkpoint').textContent = '0';
+    document.getElementById('deaths').textContent = '0';
 }
 
-function hideMessage() {
-    document.getElementById('message').style.display = 'none';
-}
+function showMessage(t) { var m = document.getElementById('message'); m.textContent = t; m.style.display = 'block'; }
+function hideMessage() { document.getElementById('message').style.display = 'none'; }
 
-// Render
 function render() {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Draw grid on ground
     ctx.strokeStyle = '#030';
     ctx.lineWidth = 1;
     for (var i = -50; i <= 50; i += 5) {
-        var p1 = worldToCamera([i, 0, -50]);
-        var p2 = worldToCamera([i, 0, 50]);
-        var clipped = clipLine(p1, p2);
-        if (clipped) {
-            var sp1 = project(clipped[0]);
-            var sp2 = project(clipped[1]);
-            if (sp1 && sp2) {
-                ctx.beginPath();
-                ctx.moveTo(sp1.x, sp1.y);
-                ctx.lineTo(sp2.x, sp2.y);
-                ctx.stroke();
-            }
-        }
-
-        p1 = worldToCamera([-50, 0, i]);
-        p2 = worldToCamera([50, 0, i]);
-        clipped = clipLine(p1, p2);
-        if (clipped) {
-            var sp1 = project(clipped[0]);
-            var sp2 = project(clipped[1]);
-            if (sp1 && sp2) {
-                ctx.beginPath();
-                ctx.moveTo(sp1.x, sp1.y);
-                ctx.lineTo(sp2.x, sp2.y);
-                ctx.stroke();
-            }
-        }
+        var cl = clipLine(worldToCamera([i,0,-50]), worldToCamera([i,0,50]));
+        if (cl) { var p1 = project(cl[0]), p2 = project(cl[1]); if (p1&&p2) { ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke(); } }
+        cl = clipLine(worldToCamera([-50,0,i]), worldToCamera([50,0,i]));
+        if (cl) { var p1 = project(cl[0]), p2 = project(cl[1]); if (p1&&p2) { ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke(); } }
     }
 
-    // Draw platforms
-    for (var i = 0; i < platforms.length; i++) {
-        drawBox(platforms[i]);
-    }
-
-    // Draw checkpoints
-    for (var i = 0; i < checkpoints.length; i++) {
-        drawCheckpoint(checkpoints[i]);
-    }
-
-    // Draw goal
+    for (var i = 0; i < platforms.length; i++) drawBox(platforms[i]);
+    for (var i = 0; i < obstacles.length; i++) drawBox(obstacles[i], '#f00');
+    for (var i = 0; i < checkpoints.length; i++) drawCheckpoint(checkpoints[i]);
     drawGoal();
-
-    // Update UI
-    document.getElementById('pos').textContent =
-        player.x.toFixed(1) + ', ' + player.y.toFixed(1) + ', ' + player.z.toFixed(1);
-    document.getElementById('speed').textContent =
-        Math.sqrt(player.vx * player.vx + player.vz * player.vz).toFixed(2);
 }
 
-// Game loop
-function gameLoop() {
-    updatePhysics();
-    render();
-    requestAnimationFrame(gameLoop);
-}
+function gameLoop() { updatePhysics(); render(); requestAnimationFrame(gameLoop); }
 
-// Event listeners
-document.addEventListener('keydown', function(e) {
-    keys[e.code] = true;
-    if (e.code === 'Space') e.preventDefault();
-});
-
-document.addEventListener('keyup', function(e) {
-    keys[e.code] = false;
-});
-
-canvas.addEventListener('click', function() {
-    canvas.requestPointerLock();
-});
-
-document.addEventListener('pointerlockchange', function() {
-    mouseLocked = document.pointerLockElement === canvas;
-});
-
+document.addEventListener('keydown', function(e) { keys[e.code] = true; if (e.code === 'Space') e.preventDefault(); });
+document.addEventListener('keyup', function(e) { keys[e.code] = false; });
+canvas.addEventListener('click', function() { canvas.requestPointerLock(); });
+document.addEventListener('pointerlockchange', function() { mouseLocked = document.pointerLockElement === canvas; });
 document.addEventListener('mousemove', function(e) {
     if (!mouseLocked) return;
-
     player.yaw -= e.movementX * 0.002;
     player.pitch += e.movementY * 0.002;
-
-    // Clamp pitch
-    player.pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, player.pitch));
+    player.pitch = Math.max(-Math.PI/2+0.1, Math.min(Math.PI/2-0.1, player.pitch));
 });
+window.addEventListener('resize', function() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; });
 
-window.addEventListener('resize', function() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-});
-
-// Initialize
 generateLevel();
 gameLoop();
 </script>
