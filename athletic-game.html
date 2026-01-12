@@ -350,12 +350,18 @@ function updatePhysics() {
     if (keys['KeyA'] || keys['ArrowLeft']) moveX = -1;
     if (keys['KeyD'] || keys['ArrowRight']) moveX = 1;
 
-    // Calculate movement direction
+    // Calculate movement direction based on view direction
     var cosYaw = Math.cos(player.yaw);
     var sinYaw = Math.sin(player.yaw);
 
-    var accelX = (moveX * cosYaw + moveZ * sinYaw) * moveSpeed;
-    var accelZ = (-moveX * sinYaw + moveZ * cosYaw) * moveSpeed;
+    // Forward is (-sin, cos), Right is (cos, sin)
+    var forwardX = -sinYaw;
+    var forwardZ = cosYaw;
+    var rightX = cosYaw;
+    var rightZ = sinYaw;
+
+    var accelX = (moveX * rightX + moveZ * forwardX) * moveSpeed;
+    var accelZ = (moveX * rightZ + moveZ * forwardZ) * moveSpeed;
 
     var control = player.onGround ? 1 : airControl;
     player.vx += accelX * control;
