@@ -233,7 +233,7 @@ function render() {
 
         for (var i = 0; i < faceData.length; i++) {
             var d = faceData[i];
-            if (d.nz < 0) continue;
+            if (d.nz > 0) continue;
 
             var color = shadeColor(d.face.color, d.brightness);
             ctx.fillStyle = color;
