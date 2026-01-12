@@ -100,12 +100,12 @@ var vertices = [
 ];
 
 var faces = [
-    { idx: [0, 1, 2, 3], color: '#ff6b6b', label: 'Back' },
-    { idx: [5, 4, 7, 6], color: '#4ecdc4', label: 'Front' },
-    { idx: [4, 0, 3, 7], color: '#ffe66d', label: 'Left' },
-    { idx: [1, 5, 6, 2], color: '#95e1d3', label: 'Right' },
-    { idx: [3, 2, 6, 7], color: '#f38181', label: 'Top' },
-    { idx: [4, 5, 1, 0], color: '#aa96da', label: 'Bottom' }
+    { idx: [0, 3, 2, 1], color: '#ff6b6b', label: 'Back' },
+    { idx: [4, 5, 6, 7], color: '#4ecdc4', label: 'Front' },
+    { idx: [0, 4, 7, 3], color: '#ffe66d', label: 'Left' },
+    { idx: [1, 2, 6, 5], color: '#95e1d3', label: 'Right' },
+    { idx: [3, 7, 6, 2], color: '#f38181', label: 'Top' },
+    { idx: [0, 1, 5, 4], color: '#aa96da', label: 'Bottom' }
 ];
 
 var edges = [
@@ -233,7 +233,7 @@ function render() {
 
         for (var i = 0; i < faceData.length; i++) {
             var d = faceData[i];
-            if (d.nz <= 0) continue;
+            if (d.nz < 0) continue;
 
             var color = shadeColor(d.face.color, d.brightness);
             ctx.fillStyle = color;
