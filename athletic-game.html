@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Wireframe Athletic Game</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    overflow: hidden;
+    background: #000;
+    font-family: Arial, sans-serif;
+}
+#canvas {
+    display: block;
+    cursor: crosshair;
+}
+#ui {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    color: #0f0;
+    font-size: 14px;
+    text-shadow: 0 0 5px #0f0;
+    pointer-events: none;
+}
+#crosshair {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #0f0;
+    font-size: 24px;
+    pointer-events: none;
+}
+#instructions {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    color: #0f0;
+    font-size: 12px;
+    opacity: 0.7;
+}
+#message {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #0f0;
+    font-size: 24px;
+    text-align: center;
+    display: none;
+}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="ui">
+    <div>Position: <span id="pos">0, 0, 0</span></div>
+    <div>Speed: <span id="speed">0</span></div>
+    <div>Checkpoint: <span id="checkpoint">0</span> / <span id="total">0</span></div>
+</div>
+<div id="crosshair">+</div>
+<div id="instructions">
+    WASD: Move | SPACE: Jump | MOUSE: Look | CLICK: Lock cursor
+</div>
+<div id="message"></div>
+
+<script>
+var canvas = document.getElementById('canvas');
+var ctx = canvas.getContext('2d');
+
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+// Player state
+var player = {
+    x: 0,
+    y: 2,
+    z: 0,
+    vx: 0,
+    vy: 0,
+    vz: 0,
+    yaw: 0,
+    pitch: 0,
+    onGround: false,
+    checkpoint: 0
+};
+
+// Physics
+var gravity = -0.015;
+var jumpForce = 0.35;
+var moveSpeed = 0.15;
+var friction = 0.85;
+var airControl = 0.3;
+
+// Input state
+var keys = {};
+var mouseLocked = false;
+
+// Platforms and obstacles
+var platforms = [];
+var checkpoints = [];
+var goal = null;
+
+// Generate level
+function generateLevel() {
+    platforms = [];
+    checkpoints = [];
+
+    // Starting platform
+    platforms.push({ x: 0, y: 0, z: 0, w: 6, h: 1, d: 6, color: '#0f0' });
+
+    // Platform sequence - parkour course
+    var course = [
+        { x: 0, y: 0, z: 10, w: 4, h: 1, d: 4 },
+        { x: 5, y: 1, z: 15, w: 3, h: 1, d: 3 },
+        { x: 10, y: 2, z: 15, w: 3, h: 1, d: 3 },
+        { x: 15, y: 3, z: 12, w: 3, h: 1, d: 3 },
+        { x: 15, y: 4, z: 6, w: 3, h: 1, d: 3 },
+        { x: 12, y: 5, z: 0, w: 3, h: 1, d: 3 },
+        { x: 6, y: 6, z: -3, w: 3, h: 1, d: 3 },
+        { x: 0, y: 7, z: -6, w: 3, h: 1, d: 3 },
+        { x: -6, y: 8, z: -6, w: 3, h: 1, d: 3 },
+        { x: -10, y: 9, z: -3, w: 3, h: 1, d: 3 },
+        { x: -10, y: 10, z: 3, w: 3, h: 1, d: 3 },
+        { x: -6, y: 11, z: 8, w: 3, h: 1, d: 3 },
+        { x: 0, y: 12, z: 12, w: 4, h: 1, d: 4 },
+    ];
+
+    for (var i = 0; i < course.length; i++) {
+        var p = course[i];
+        platforms.push({
+            x: p.x, y: p.y, z: p.z,
+            w: p.w, h: p.h, d: p.d,
+            color: '#0a0'
+        });
+    }
+
+    // Checkpoints
+    checkpoints = [
+        { x: 15, y: 4.5, z: 6, reached: false },
+        { x: -10, y: 10.5, z: 3, reached: false },
+        { x: 0, y: 13, z: 12, reached: false }
+    ];
+
+    // Goal
+    goal = { x: 0, y: 14, z: 12 };
+
+    document.getElementById('total').textContent = checkpoints.length;
+}
+
+// Get box vertices
+function getBoxVertices(box) {
+    var x = box.x, y = box.y, z = box.z;
+    var w = box.w / 2, h = box.h / 2, d = box.d / 2;
+    return [
+        [x - w, y - h, z - d],
+        [x + w, y - h, z - d],
+        [x + w, y + h, z - d],
+        [x - w, y + h, z - d],
+        [x - w, y - h, z + d],
+        [x + w, y - h, z + d],
+        [x + w, y + h, z + d],
+        [x - w, y + h, z + d]
+    ];
+}
+
+var boxEdges = [
+    [0,1], [1,2], [2,3], [3,0],
+    [4,5], [5,6], [6,7], [7,4],
+    [0,4], [1,5], [2,6], [3,7]
+];
+
+// Transform point to camera space
+function worldToCamera(point) {
+    var dx = point[0] - player.x;
+    var dy = point[1] - player.y;
+    var dz = point[2] - player.z;
+
+    var cosYaw = Math.cos(-player.yaw);
+    var sinYaw = Math.sin(-player.yaw);
+    var cosPitch = Math.cos(-player.pitch);
+    var sinPitch = Math.sin(-player.pitch);
+
+    var x1 = dx * cosYaw - dz * sinYaw;
+    var z1 = dx * sinYaw + dz * cosYaw;
+    var y1 = dy * cosPitch - z1 * sinPitch;
+    var z2 = dy * sinPitch + z1 * cosPitch;
+
+    return [x1, y1, z2];
+}
+
+// Project to screen
+function project(camPoint) {
+    var fov = 500;
+    var z = camPoint[2];
+    if (z < 0.1) return null;
+
+    var factor = fov / z;
+    return {
+        x: camPoint[0] * factor + canvas.width / 2,
+        y: -camPoint[1] * factor + canvas.height / 2,
+        z: z
+    };
+}
+
+// Clip line to near plane
+function clipLine(p1, p2) {
+    var near = 0.1;
+    if (p1[2] >= near && p2[2] >= near) return [p1, p2];
+    if (p1[2] < near && p2[2] < near) return null;
+
+    var t = (near - p1[2]) / (p2[2] - p1[2]);
+    var clipped = [
+        p1[0] + t * (p2[0] - p1[0]),
+        p1[1] + t * (p2[1] - p1[1]),
+        near
+    ];
+
+    if (p1[2] < near) return [clipped, p2];
+    return [p1, clipped];
+}
+
+// Draw wireframe box
+function drawBox(box) {
+    var verts = getBoxVertices(box);
+    var camVerts = verts.map(worldToCamera);
+
+    ctx.strokeStyle = box.color || '#0f0';
+    ctx.lineWidth = 1;
+
+    for (var i = 0; i < boxEdges.length; i++) {
+        var e = boxEdges[i];
+        var clipped = clipLine(camVerts[e[0]], camVerts[e[1]]);
+        if (!clipped) continue;
+
+        var p1 = project(clipped[0]);
+        var p2 = project(clipped[1]);
+        if (!p1 || !p2) continue;
+
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+    }
+}
+
+// Draw checkpoint ring
+function drawCheckpoint(cp) {
+    var segments = 16;
+    var radius = 1.5;
+    var points = [];
+
+    for (var i = 0; i <= segments; i++) {
+        var angle = (i / segments) * Math.PI * 2;
+        points.push([
+            cp.x + Math.cos(angle) * radius,
+            cp.y,
+            cp.z + Math.sin(angle) * radius
+        ]);
+    }
+
+    var camPoints = points.map(worldToCamera);
+    ctx.strokeStyle = cp.reached ? '#ff0' : '#f0f';
+    ctx.lineWidth = 2;
+
+    ctx.beginPath();
+    var started = false;
+    for (var i = 0; i < camPoints.length - 1; i++) {
+        var clipped = clipLine(camPoints[i], camPoints[i + 1]);
+        if (!clipped) continue;
+
+        var p1 = project(clipped[0]);
+        var p2 = project(clipped[1]);
+        if (!p1 || !p2) continue;
+
+        if (!started) {
+            ctx.moveTo(p1.x, p1.y);
+            started = true;
+        }
+        ctx.lineTo(p2.x, p2.y);
+    }
+    ctx.stroke();
+}
+
+// Draw goal
+function drawGoal() {
+    if (!goal) return;
+
+    var size = 2;
+    ctx.strokeStyle = '#ff0';
+    ctx.lineWidth = 3;
+
+    // Draw star shape
+    var points = [];
+    for (var i = 0; i < 10; i++) {
+        var angle = (i / 10) * Math.PI * 2 - Math.PI / 2;
+        var r = (i % 2 === 0) ? size : size * 0.5;
+        points.push([
+            goal.x + Math.cos(angle) * r,
+            goal.y + Math.sin(angle) * r,
+            goal.z
+        ]);
+    }
+    points.push(points[0]);
+
+    var camPoints = points.map(worldToCamera);
+    ctx.beginPath();
+    var started = false;
+    for (var i = 0; i < camPoints.length - 1; i++) {
+        var clipped = clipLine(camPoints[i], camPoints[i + 1]);
+        if (!clipped) continue;
+
+        var p1 = project(clipped[0]);
+        var p2 = project(clipped[1]);
+        if (!p1 || !p2) continue;
+
+        if (!started) {
+            ctx.moveTo(p1.x, p1.y);
+            started = true;
+        }
+        ctx.lineTo(p2.x, p2.y);
+    }
+    ctx.stroke();
+}
+
+// Check collision with platform
+function checkPlatformCollision(px, py, pz, platform) {
+    var hw = platform.w / 2;
+    var hh = platform.h / 2;
+    var hd = platform.d / 2;
+
+    return px >= platform.x - hw - 0.3 &&
+           px <= platform.x + hw + 0.3 &&
+           py >= platform.y - hh &&
+           py <= platform.y + hh + 1.8 &&
+           pz >= platform.z - hd - 0.3 &&
+           pz <= platform.z + hd + 0.3;
+}
+
+// Update physics
+function updatePhysics() {
+    // Movement input
+    var moveX = 0;
+    var moveZ = 0;
+
+    if (keys['KeyW'] || keys['ArrowUp']) moveZ = 1;
+    if (keys['KeyS'] || keys['ArrowDown']) moveZ = -1;
+    if (keys['KeyA'] || keys['ArrowLeft']) moveX = -1;
+    if (keys['KeyD'] || keys['ArrowRight']) moveX = 1;
+
+    // Calculate movement direction
+    var cosYaw = Math.cos(player.yaw);
+    var sinYaw = Math.sin(player.yaw);
+
+    var accelX = (moveX * cosYaw + moveZ * sinYaw) * moveSpeed;
+    var accelZ = (-moveX * sinYaw + moveZ * cosYaw) * moveSpeed;
+
+    var control = player.onGround ? 1 : airControl;
+    player.vx += accelX * control;
+    player.vz += accelZ * control;
+
+    // Gravity
+    player.vy += gravity;
+
+    // Jump
+    if ((keys['Space'] || keys['KeySpace']) && player.onGround) {
+        player.vy = jumpForce;
+        player.onGround = false;
+    }
+
+    // Apply friction
+    player.vx *= friction;
+    player.vz *= friction;
+
+    // Update position
+    var newX = player.x + player.vx;
+    var newY = player.y + player.vy;
+    var newZ = player.z + player.vz;
+
+    // Check collision with platforms
+    player.onGround = false;
+
+    for (var i = 0; i < platforms.length; i++) {
+        var p = platforms[i];
+        var hw = p.w / 2;
+        var hh = p.h / 2;
+        var hd = p.d / 2;
+
+        // Check if player is above platform
+        if (newX >= p.x - hw - 0.2 && newX <= p.x + hw + 0.2 &&
+            newZ >= p.z - hd - 0.2 && newZ <= p.z + hd + 0.2) {
+
+            var topY = p.y + hh;
+
+            // Landing on top
+            if (player.y >= topY && newY < topY + 1.8 && player.vy <= 0) {
+                newY = topY + 1.8;
+                player.vy = 0;
+                player.onGround = true;
+            }
+        }
+    }
+
+    player.x = newX;
+    player.y = newY;
+    player.z = newZ;
+
+    // Respawn if fell
+    if (player.y < -20) {
+        respawn();
+    }
+
+    // Check checkpoints
+    for (var i = 0; i < checkpoints.length; i++) {
+        var cp = checkpoints[i];
+        if (cp.reached) continue;
+
+        var dx = player.x - cp.x;
+        var dy = player.y - cp.y;
+        var dz = player.z - cp.z;
+        var dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+        if (dist < 2) {
+            cp.reached = true;
+            player.checkpoint = i + 1;
+            document.getElementById('checkpoint').textContent = player.checkpoint;
+        }
+    }
+
+    // Check goal
+    if (goal) {
+        var dx = player.x - goal.x;
+        var dy = player.y - goal.y;
+        var dz = player.z - goal.z;
+        var dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+        if (dist < 2 && checkpoints.every(function(c) { return c.reached; })) {
+            showMessage('GOAL! You Win!');
+            setTimeout(function() {
+                hideMessage();
+                resetGame();
+            }, 3000);
+        }
+    }
+}
+
+function respawn() {
+    // Find last checkpoint
+    var spawnX = 0, spawnY = 2, spawnZ = 0;
+
+    for (var i = checkpoints.length - 1; i >= 0; i--) {
+        if (checkpoints[i].reached) {
+            spawnX = checkpoints[i].x;
+            spawnY = checkpoints[i].y + 2;
+            spawnZ = checkpoints[i].z;
+            break;
+        }
+    }
+
+    player.x = spawnX;
+    player.y = spawnY;
+    player.z = spawnZ;
+    player.vx = 0;
+    player.vy = 0;
+    player.vz = 0;
+}
+
+function resetGame() {
+    player.x = 0;
+    player.y = 2;
+    player.z = 0;
+    player.vx = 0;
+    player.vy = 0;
+    player.vz = 0;
+    player.checkpoint = 0;
+
+    for (var i = 0; i < checkpoints.length; i++) {
+        checkpoints[i].reached = false;
+    }
+
+    document.getElementById('checkpoint').textContent = '0';
+}
+
+function showMessage(text) {
+    var msg = document.getElementById('message');
+    msg.textContent = text;
+    msg.style.display = 'block';
+}
+
+function hideMessage() {
+    document.getElementById('message').style.display = 'none';
+}
+
+// Render
+function render() {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw grid on ground
+    ctx.strokeStyle = '#030';
+    ctx.lineWidth = 1;
+    for (var i = -50; i <= 50; i += 5) {
+        var p1 = worldToCamera([i, 0, -50]);
+        var p2 = worldToCamera([i, 0, 50]);
+        var clipped = clipLine(p1, p2);
+        if (clipped) {
+            var sp1 = project(clipped[0]);
+            var sp2 = project(clipped[1]);
+            if (sp1 && sp2) {
+                ctx.beginPath();
+                ctx.moveTo(sp1.x, sp1.y);
+                ctx.lineTo(sp2.x, sp2.y);
+                ctx.stroke();
+            }
+        }
+
+        p1 = worldToCamera([-50, 0, i]);
+        p2 = worldToCamera([50, 0, i]);
+        clipped = clipLine(p1, p2);
+        if (clipped) {
+            var sp1 = project(clipped[0]);
+            var sp2 = project(clipped[1]);
+            if (sp1 && sp2) {
+                ctx.beginPath();
+                ctx.moveTo(sp1.x, sp1.y);
+                ctx.lineTo(sp2.x, sp2.y);
+                ctx.stroke();
+            }
+        }
+    }
+
+    // Draw platforms
+    for (var i = 0; i < platforms.length; i++) {
+        drawBox(platforms[i]);
+    }
+
+    // Draw checkpoints
+    for (var i = 0; i < checkpoints.length; i++) {
+        drawCheckpoint(checkpoints[i]);
+    }
+
+    // Draw goal
+    drawGoal();
+
+    // Update UI
+    document.getElementById('pos').textContent =
+        player.x.toFixed(1) + ', ' + player.y.toFixed(1) + ', ' + player.z.toFixed(1);
+    document.getElementById('speed').textContent =
+        Math.sqrt(player.vx * player.vx + player.vz * player.vz).toFixed(2);
+}
+
+// Game loop
+function gameLoop() {
+    updatePhysics();
+    render();
+    requestAnimationFrame(gameLoop);
+}
+
+// Event listeners
+document.addEventListener('keydown', function(e) {
+    keys[e.code] = true;
+    if (e.code === 'Space') e.preventDefault();
+});
+
+document.addEventListener('keyup', function(e) {
+    keys[e.code] = false;
+});
+
+canvas.addEventListener('click', function() {
+    canvas.requestPointerLock();
+});
+
+document.addEventListener('pointerlockchange', function() {
+    mouseLocked = document.pointerLockElement === canvas;
+});
+
+document.addEventListener('mousemove', function(e) {
+    if (!mouseLocked) return;
+
+    player.yaw += e.movementX * 0.002;
+    player.pitch -= e.movementY * 0.002;
+
+    // Clamp pitch
+    player.pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, player.pitch));
+});
+
+window.addEventListener('resize', function() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+});
+
+// Initialize
+generateLevel();
+gameLoop();
+</script>
+</body>
+</html>
