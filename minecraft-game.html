@@ -1,0 +1,1529 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Minecraft-like Game</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { overflow: hidden; background: #87CEEB; font-family: Arial, sans-serif; }
+#canvas { display: block; cursor: crosshair; }
+#ui { position: fixed; top: 10px; left: 10px; color: #fff; font-size: 14px; text-shadow: 1px 1px 2px #000; pointer-events: none; }
+#crosshair { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #fff; font-size: 20px; pointer-events: none; text-shadow: 1px 1px 2px #000; }
+#hotbar { position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 2px; }
+.slot { width: 50px; height: 50px; background: rgba(0,0,0,0.6); border: 2px solid #555; display: flex; align-items: center; justify-content: center; flex-direction: column; color: #fff; font-size: 10px; }
+.slot.selected { border-color: #fff; }
+.slot-count { font-size: 12px; position: absolute; bottom: 2px; right: 4px; }
+#inventory { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.85); padding: 20px; border: 3px solid #555; display: none; z-index: 100; }
+#inventory h3 { color: #fff; margin-bottom: 10px; }
+#inv-grid { display: grid; grid-template-columns: repeat(9, 50px); gap: 2px; margin-bottom: 20px; }
+#crafting { margin-top: 20px; }
+#craft-grid { display: grid; grid-template-columns: repeat(3, 50px); gap: 2px; }
+#craft-result { margin-top: 10px; }
+.craft-btn { background: #4a4; color: #fff; border: none; padding: 10px 20px; cursor: pointer; margin: 5px; }
+.craft-btn:hover { background: #5b5; }
+#health-bar { position: fixed; top: 10px; right: 10px; display: flex; gap: 2px; }
+.heart { width: 20px; height: 20px; background: #f00; clip-path: path('M10,6 C10,2 6,0 3,3 C0,6 0,10 10,18 C20,10 20,6 17,3 C14,0 10,2 10,6'); }
+.heart.empty { background: #333; }
+#message { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #fff; font-size: 32px; text-shadow: 2px 2px 4px #000; display: none; }
+#instructions { position: fixed; bottom: 80px; left: 10px; color: #fff; font-size: 11px; text-shadow: 1px 1px 2px #000; opacity: 0.8; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="ui">
+    <div>Position: <span id="pos">0, 0, 0</span></div>
+    <div>Biome: <span id="biome">-</span></div>
+    <div>FPS: <span id="fps">0</span></div>
+</div>
+<div id="crosshair">+</div>
+<div id="hotbar"></div>
+<div id="health-bar"></div>
+<div id="inventory">
+    <h3>Inventory (E to close)</h3>
+    <div id="inv-grid"></div>
+    <div id="crafting">
+        <h3>Crafting</h3>
+        <div id="craft-buttons"></div>
+    </div>
+</div>
+<div id="message"></div>
+<div id="instructions">
+WASD: Move | SPACE: Jump | SHIFT: Sneak<br>
+Mouse: Look | LClick: Mine/Attack | RClick: Place/Use<br>
+E: Inventory | 1-9: Select slot | Q: Drop item
+</div>
+
+<script>
+var canvas = document.getElementById('canvas');
+var ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+// Block types
+var BLOCKS = {
+    AIR: 0, GRASS: 1, DIRT: 2, STONE: 3, WOOD: 4, LEAVES: 5, WATER: 6,
+    SAND: 7, IRON_ORE: 8, FLOWER_RED: 9, FLOWER_YELLOW: 10, TALL_GRASS: 11,
+    LOG: 12, PLANKS: 13, CRAFTING_TABLE: 14, BED: 15, GLASS: 16
+};
+
+var BLOCK_COLORS = {
+    0: null,
+    1: '#3a8c3a', 2: '#8b6914', 3: '#808080', 4: '#8b6914', 5: '#228b22',
+    6: '#4169e1', 7: '#f4e4a4', 8: '#a08060', 9: '#ff4444', 10: '#ffff44',
+    11: '#2a6c2a', 12: '#6b4423', 13: '#c4a46a', 14: '#8b6914', 15: '#cc4444',
+    16: '#aaddff'
+};
+
+var BLOCK_NAMES = {
+    0: 'Air', 1: 'Grass', 2: 'Dirt', 3: 'Stone', 4: 'Wood', 5: 'Leaves',
+    6: 'Water', 7: 'Sand', 8: 'Iron Ore', 9: 'Red Flower', 10: 'Yellow Flower',
+    11: 'Tall Grass', 12: 'Log', 13: 'Planks', 14: 'Crafting Table', 15: 'Bed',
+    16: 'Glass'
+};
+
+// Item types
+var ITEMS = {
+    WOOD: 'wood', STONE: 'stone', IRON: 'iron', DIRT: 'dirt',
+    WOOD_AXE: 'wood_axe', WOOD_SWORD: 'wood_sword', WOOD_PICKAXE: 'wood_pickaxe',
+    STONE_AXE: 'stone_axe', STONE_SWORD: 'stone_sword', STONE_PICKAXE: 'stone_pickaxe',
+    IRON_AXE: 'iron_axe', IRON_SWORD: 'iron_sword', IRON_PICKAXE: 'iron_pickaxe',
+    CRAFTING_TABLE: 'crafting_table', AKM: 'akm', FLOWER: 'flower', PORK: 'pork'
+};
+
+var ITEM_COLORS = {
+    wood: '#8b6914', stone: '#808080', iron: '#c0c0c0', dirt: '#8b6914',
+    wood_axe: '#a07030', wood_sword: '#a07030', wood_pickaxe: '#a07030',
+    stone_axe: '#909090', stone_sword: '#909090', stone_pickaxe: '#909090',
+    iron_axe: '#d0d0d0', iron_sword: '#d0d0d0', iron_pickaxe: '#d0d0d0',
+    crafting_table: '#8b6914', akm: '#333', flower: '#ff6699', pork: '#ffaaaa'
+};
+
+var ITEM_NAMES = {
+    wood: 'Wood', stone: 'Stone', iron: 'Iron', dirt: 'Dirt',
+    wood_axe: 'Wood Axe', wood_sword: 'Wood Sword', wood_pickaxe: 'Wood Pickaxe',
+    stone_axe: 'Stone Axe', stone_sword: 'Stone Sword', stone_pickaxe: 'Stone Pickaxe',
+    iron_axe: 'Iron Axe', iron_sword: 'Iron Sword', iron_pickaxe: 'Iron Pickaxe',
+    crafting_table: 'Crafting Table', akm: 'AKM', flower: 'Flower', pork: 'Pork'
+};
+
+// Recipes
+var RECIPES = [
+    { result: 'crafting_table', count: 1, cost: { wood: 4 }, needsTable: false },
+    { result: 'wood_axe', count: 1, cost: { wood: 2 }, needsTable: true },
+    { result: 'wood_sword', count: 1, cost: { wood: 3 }, needsTable: true },
+    { result: 'wood_pickaxe', count: 1, cost: { wood: 3 }, needsTable: true },
+    { result: 'stone_axe', count: 1, cost: { stone: 2 }, needsTable: true },
+    { result: 'stone_sword', count: 1, cost: { stone: 3 }, needsTable: true },
+    { result: 'stone_pickaxe', count: 1, cost: { stone: 3 }, needsTable: true },
+    { result: 'iron_axe', count: 1, cost: { iron: 2 }, needsTable: true },
+    { result: 'iron_sword', count: 1, cost: { iron: 3 }, needsTable: true },
+    { result: 'iron_pickaxe', count: 1, cost: { iron: 3 }, needsTable: true },
+    { result: 'akm', count: 1, cost: { iron: 4 }, needsTable: true }
+];
+
+// World settings
+var CHUNK_SIZE = 16;
+var WORLD_HEIGHT = 64;
+var RENDER_DISTANCE = 4;
+var SEA_LEVEL = 20;
+
+// World data
+var chunks = {};
+var mobs = [];
+var droppedItems = [];
+
+// Player
+var player = {
+    x: 0, y: 30, z: 0,
+    vx: 0, vy: 0, vz: 0,
+    yaw: 0, pitch: 0,
+    onGround: false,
+    health: 10,
+    maxHealth: 10,
+    inventory: [],
+    hotbarSlot: 0,
+    nearCraftingTable: false
+};
+
+// Initialize inventory (36 slots)
+for (var i = 0; i < 36; i++) {
+    player.inventory.push(null);
+}
+
+// Give starting items
+player.inventory[0] = { item: 'wood', count: 10 };
+player.inventory[1] = { item: 'wood_pickaxe', count: 1 };
+
+var keys = {};
+var mouseLocked = false;
+var inventoryOpen = false;
+var lastTime = 0;
+var frameCount = 0;
+var fps = 0;
+
+// Noise function for terrain generation
+function noise2D(x, z, seed) {
+    var n = Math.sin(x * 12.9898 + z * 78.233 + seed) * 43758.5453;
+    return n - Math.floor(n);
+}
+
+function smoothNoise(x, z, seed) {
+    var corners = (noise2D(x-1, z-1, seed) + noise2D(x+1, z-1, seed) +
+                   noise2D(x-1, z+1, seed) + noise2D(x+1, z+1, seed)) / 16;
+    var sides = (noise2D(x-1, z, seed) + noise2D(x+1, z, seed) +
+                 noise2D(x, z-1, seed) + noise2D(x, z+1, seed)) / 8;
+    var center = noise2D(x, z, seed) / 4;
+    return corners + sides + center;
+}
+
+function interpolatedNoise(x, z, seed) {
+    var intX = Math.floor(x), intZ = Math.floor(z);
+    var fracX = x - intX, fracZ = z - intZ;
+    var v1 = smoothNoise(intX, intZ, seed);
+    var v2 = smoothNoise(intX + 1, intZ, seed);
+    var v3 = smoothNoise(intX, intZ + 1, seed);
+    var v4 = smoothNoise(intX + 1, intZ + 1, seed);
+    var i1 = v1 * (1 - fracX) + v2 * fracX;
+    var i2 = v3 * (1 - fracX) + v4 * fracX;
+    return i1 * (1 - fracZ) + i2 * fracZ;
+}
+
+function perlinNoise(x, z, seed, octaves, persistence) {
+    var total = 0, frequency = 0.02, amplitude = 1, maxValue = 0;
+    for (var i = 0; i < octaves; i++) {
+        total += interpolatedNoise(x * frequency, z * frequency, seed + i * 1000) * amplitude;
+        maxValue += amplitude;
+        amplitude *= persistence;
+        frequency *= 2;
+    }
+    return total / maxValue;
+}
+
+// Biome determination
+function getBiome(x, z) {
+    var temp = perlinNoise(x, z, 1234, 4, 0.5);
+    var moisture = perlinNoise(x, z, 5678, 4, 0.5);
+    var height = perlinNoise(x, z, 9012, 6, 0.5);
+
+    if (height > 0.65) return 'mountain';
+    if (moisture > 0.6 && height < 0.4) return 'pond';
+    if (temp > 0.5 && moisture < 0.4) return 'grassland';
+    return 'forest';
+}
+
+// Check if position is in a village
+function isVillage(x, z) {
+    var vx = Math.floor(x / 200);
+    var vz = Math.floor(z / 200);
+    var n = noise2D(vx, vz, 3456);
+    return n > 0.7;
+}
+
+// Generate chunk
+function generateChunk(cx, cz) {
+    var key = cx + ',' + cz;
+    if (chunks[key]) return;
+
+    var chunk = new Uint8Array(CHUNK_SIZE * WORLD_HEIGHT * CHUNK_SIZE);
+    var worldX = cx * CHUNK_SIZE;
+    var worldZ = cz * CHUNK_SIZE;
+
+    for (var x = 0; x < CHUNK_SIZE; x++) {
+        for (var z = 0; z < CHUNK_SIZE; z++) {
+            var wx = worldX + x;
+            var wz = worldZ + z;
+            var biome = getBiome(wx, wz);
+            var heightNoise = perlinNoise(wx, wz, 9012, 6, 0.5);
+            var baseHeight = SEA_LEVEL;
+
+            if (biome === 'mountain') {
+                baseHeight = SEA_LEVEL + Math.floor(heightNoise * 30);
+            } else if (biome === 'pond') {
+                baseHeight = SEA_LEVEL - 5 + Math.floor(heightNoise * 5);
+            } else {
+                baseHeight = SEA_LEVEL + Math.floor(heightNoise * 10);
+            }
+
+            for (var y = 0; y < WORLD_HEIGHT; y++) {
+                var idx = x + y * CHUNK_SIZE + z * CHUNK_SIZE * WORLD_HEIGHT;
+
+                if (y === 0) {
+                    chunk[idx] = BLOCKS.STONE;
+                } else if (y < baseHeight - 4) {
+                    chunk[idx] = BLOCKS.STONE;
+                    // Iron ore
+                    if (y < 30 && noise2D(wx + y, wz, 7777) > 0.92) {
+                        chunk[idx] = BLOCKS.IRON_ORE;
+                    }
+                } else if (y < baseHeight) {
+                    chunk[idx] = BLOCKS.DIRT;
+                } else if (y === baseHeight) {
+                    if (biome === 'pond' && y < SEA_LEVEL - 2) {
+                        chunk[idx] = BLOCKS.SAND;
+                    } else {
+                        chunk[idx] = BLOCKS.GRASS;
+                    }
+                } else if (y <= SEA_LEVEL && biome === 'pond') {
+                    chunk[idx] = BLOCKS.WATER;
+                } else {
+                    chunk[idx] = BLOCKS.AIR;
+                }
+            }
+
+            // Add vegetation
+            if (chunk[x + baseHeight * CHUNK_SIZE + z * CHUNK_SIZE * WORLD_HEIGHT] === BLOCKS.GRASS) {
+                var vegNoise = noise2D(wx * 3, wz * 3, 2222);
+
+                if (biome === 'forest') {
+                    // Trees
+                    if (vegNoise > 0.85 && x > 1 && x < CHUNK_SIZE - 2 && z > 1 && z < CHUNK_SIZE - 2) {
+                        var treeHeight = 4 + Math.floor(noise2D(wx, wz, 3333) * 3);
+                        for (var ty = 1; ty <= treeHeight; ty++) {
+                            var tidx = x + (baseHeight + ty) * CHUNK_SIZE + z * CHUNK_SIZE * WORLD_HEIGHT;
+                            if (baseHeight + ty < WORLD_HEIGHT) chunk[tidx] = BLOCKS.LOG;
+                        }
+                        // Leaves
+                        for (var lx = -2; lx <= 2; lx++) {
+                            for (var lz = -2; lz <= 2; lz++) {
+                                for (var ly = treeHeight - 1; ly <= treeHeight + 1; ly++) {
+                                    if (Math.abs(lx) + Math.abs(lz) + Math.abs(ly - treeHeight) < 4) {
+                                        var lidx = (x + lx) + (baseHeight + ly) * CHUNK_SIZE + (z + lz) * CHUNK_SIZE * WORLD_HEIGHT;
+                                        if (x + lx >= 0 && x + lx < CHUNK_SIZE && z + lz >= 0 && z + lz < CHUNK_SIZE && baseHeight + ly < WORLD_HEIGHT) {
+                                            if (chunk[lidx] === BLOCKS.AIR) chunk[lidx] = BLOCKS.LEAVES;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if (vegNoise > 0.5) {
+                        // Tall grass
+                        var gidx = x + (baseHeight + 1) * CHUNK_SIZE + z * CHUNK_SIZE * WORLD_HEIGHT;
+                        if (baseHeight + 1 < WORLD_HEIGHT) chunk[gidx] = BLOCKS.TALL_GRASS;
+                    } else if (vegNoise > 0.45) {
+                        // Flowers
+                        var fidx = x + (baseHeight + 1) * CHUNK_SIZE + z * CHUNK_SIZE * WORLD_HEIGHT;
+                        if (baseHeight + 1 < WORLD_HEIGHT) {
+                            chunk[fidx] = noise2D(wx, wz, 4444) > 0.5 ? BLOCKS.FLOWER_RED : BLOCKS.FLOWER_YELLOW;
+                        }
+                    }
+                } else if (biome === 'grassland') {
+                    if (vegNoise > 0.95 && x > 1 && x < CHUNK_SIZE - 2 && z > 1 && z < CHUNK_SIZE - 2) {
+                        // Rare trees
+                        var treeHeight = 4 + Math.floor(noise2D(wx, wz, 3333) * 2);
+                        for (var ty = 1; ty <= treeHeight; ty++) {
+                            var tidx = x + (baseHeight + ty) * CHUNK_SIZE + z * CHUNK_SIZE * WORLD_HEIGHT;
+                            if (baseHeight + ty < WORLD_HEIGHT) chunk[tidx] = BLOCKS.LOG;
+                        }
+                        for (var lx = -2; lx <= 2; lx++) {
+                            for (var lz = -2; lz <= 2; lz++) {
+                                for (var ly = treeHeight - 1; ly <= treeHeight + 1; ly++) {
+                                    if (Math.abs(lx) + Math.abs(lz) + Math.abs(ly - treeHeight) < 4) {
+                                        var lidx = (x + lx) + (baseHeight + ly) * CHUNK_SIZE + (z + lz) * CHUNK_SIZE * WORLD_HEIGHT;
+                                        if (x + lx >= 0 && x + lx < CHUNK_SIZE && z + lz >= 0 && z + lz < CHUNK_SIZE && baseHeight + ly < WORLD_HEIGHT) {
+                                            if (chunk[lidx] === BLOCKS.AIR) chunk[lidx] = BLOCKS.LEAVES;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if (vegNoise > 0.3) {
+                        var gidx = x + (baseHeight + 1) * CHUNK_SIZE + z * CHUNK_SIZE * WORLD_HEIGHT;
+                        if (baseHeight + 1 < WORLD_HEIGHT) {
+                            chunk[gidx] = vegNoise > 0.6 ? (noise2D(wx, wz, 4444) > 0.5 ? BLOCKS.FLOWER_RED : BLOCKS.FLOWER_YELLOW) : BLOCKS.TALL_GRASS;
+                        }
+                    }
+                } else if (biome === 'mountain') {
+                    if (vegNoise > 0.7 && baseHeight < SEA_LEVEL + 15) {
+                        var gidx = x + (baseHeight + 1) * CHUNK_SIZE + z * CHUNK_SIZE * WORLD_HEIGHT;
+                        if (baseHeight + 1 < WORLD_HEIGHT) chunk[gidx] = BLOCKS.TALL_GRASS;
+                    }
+                }
+            }
+        }
+    }
+
+    chunks[key] = chunk;
+
+    // Generate village structures
+    if (isVillage(worldX + CHUNK_SIZE/2, worldZ + CHUNK_SIZE/2)) {
+        generateVillageInChunk(cx, cz, chunk);
+    }
+
+    // Spawn mobs
+    spawnMobsInChunk(cx, cz);
+}
+
+function generateVillageInChunk(cx, cz, chunk) {
+    var worldX = cx * CHUNK_SIZE;
+    var worldZ = cz * CHUNK_SIZE;
+    var villageX = Math.floor(worldX / 200) * 200 + 100;
+    var villageZ = Math.floor(worldZ / 200) * 200 + 100;
+
+    // Check if this chunk contains part of the village center
+    if (worldX <= villageX && villageX < worldX + CHUNK_SIZE &&
+        worldZ <= villageZ && villageZ < worldZ + CHUNK_SIZE) {
+
+        var numHouses = 6 + Math.floor(noise2D(villageX, villageZ, 8888) * 5);
+
+        for (var h = 0; h < numHouses; h++) {
+            var angle = (h / numHouses) * Math.PI * 2;
+            var dist = 8 + noise2D(h, villageX, 9999) * 15;
+            var hx = Math.floor(villageX + Math.cos(angle) * dist) - worldX;
+            var hz = Math.floor(villageZ + Math.sin(angle) * dist) - worldZ;
+
+            if (hx >= 2 && hx < CHUNK_SIZE - 6 && hz >= 2 && hz < CHUNK_SIZE - 6) {
+                var groundY = getGroundHeight(worldX + hx, worldZ + hz, chunk, hx, hz);
+                var isLarge = noise2D(h, villageZ, 1111) > 0.7;
+                buildHouse(chunk, hx, groundY, hz, isLarge);
+            }
+        }
+
+        // Build well in center
+        var wellX = villageX - worldX;
+        var wellZ = villageZ - worldZ;
+        if (wellX >= 1 && wellX < CHUNK_SIZE - 2 && wellZ >= 1 && wellZ < CHUNK_SIZE - 2) {
+            var groundY = getGroundHeight(villageX, villageZ, chunk, wellX, wellZ);
+            buildWell(chunk, wellX, groundY, wellZ);
+        }
+    }
+}
+
+function getGroundHeight(wx, wz, chunk, localX, localZ) {
+    for (var y = WORLD_HEIGHT - 1; y >= 0; y--) {
+        var idx = localX + y * CHUNK_SIZE + localZ * CHUNK_SIZE * WORLD_HEIGHT;
+        if (chunk[idx] !== BLOCKS.AIR && chunk[idx] !== BLOCKS.WATER &&
+            chunk[idx] !== BLOCKS.LEAVES && chunk[idx] !== BLOCKS.TALL_GRASS &&
+            chunk[idx] !== BLOCKS.FLOWER_RED && chunk[idx] !== BLOCKS.FLOWER_YELLOW) {
+            return y;
+        }
+    }
+    return SEA_LEVEL;
+}
+
+function buildHouse(chunk, x, y, z, isLarge) {
+    var w = isLarge ? 7 : 5;
+    var h = isLarge ? 6 : 4;
+    var d = isLarge ? 7 : 5;
+
+    // Floor and walls
+    for (var hx = 0; hx < w; hx++) {
+        for (var hz = 0; hz < d; hz++) {
+            for (var hy = 0; hy <= h; hy++) {
+                var idx = (x + hx) + (y + hy) * CHUNK_SIZE + (z + hz) * CHUNK_SIZE * WORLD_HEIGHT;
+                if (x + hx >= CHUNK_SIZE || z + hz >= CHUNK_SIZE || y + hy >= WORLD_HEIGHT) continue;
+
+                if (hy === 0) {
+                    chunk[idx] = BLOCKS.PLANKS;
+                } else if (hx === 0 || hx === w - 1 || hz === 0 || hz === d - 1) {
+                    // Walls with windows
+                    if (hy === 2 && (hx === Math.floor(w/2) || hz === Math.floor(d/2))) {
+                        chunk[idx] = BLOCKS.GLASS;
+                    } else if (hy < h) {
+                        chunk[idx] = BLOCKS.PLANKS;
+                    }
+                } else if (hy === h) {
+                    // Roof
+                    chunk[idx] = BLOCKS.PLANKS;
+                } else {
+                    chunk[idx] = BLOCKS.AIR;
+                }
+            }
+        }
+    }
+
+    // Door
+    var doorIdx = (x + Math.floor(w/2)) + (y + 1) * CHUNK_SIZE + z * CHUNK_SIZE * WORLD_HEIGHT;
+    if (x + Math.floor(w/2) < CHUNK_SIZE) chunk[doorIdx] = BLOCKS.AIR;
+    doorIdx = (x + Math.floor(w/2)) + (y + 2) * CHUNK_SIZE + z * CHUNK_SIZE * WORLD_HEIGHT;
+    if (x + Math.floor(w/2) < CHUNK_SIZE) chunk[doorIdx] = BLOCKS.AIR;
+
+    // Crafting table
+    var ctIdx = (x + 1) + (y + 1) * CHUNK_SIZE + (z + 1) * CHUNK_SIZE * WORLD_HEIGHT;
+    if (x + 1 < CHUNK_SIZE && z + 1 < CHUNK_SIZE) chunk[ctIdx] = BLOCKS.CRAFTING_TABLE;
+
+    // Bed
+    var bedIdx = (x + w - 2) + (y + 1) * CHUNK_SIZE + (z + 1) * CHUNK_SIZE * WORLD_HEIGHT;
+    if (x + w - 2 < CHUNK_SIZE && z + 1 < CHUNK_SIZE) chunk[bedIdx] = BLOCKS.BED;
+
+    if (isLarge) {
+        // Second floor
+        for (var hx = 1; hx < w - 1; hx++) {
+            for (var hz = 1; hz < d - 1; hz++) {
+                var idx = (x + hx) + (y + 3) * CHUNK_SIZE + (z + hz) * CHUNK_SIZE * WORLD_HEIGHT;
+                if (x + hx < CHUNK_SIZE && z + hz < CHUNK_SIZE) chunk[idx] = BLOCKS.PLANKS;
+            }
+        }
+        // Second crafting table and bed
+        var ct2Idx = (x + 1) + (y + 4) * CHUNK_SIZE + (z + d - 2) * CHUNK_SIZE * WORLD_HEIGHT;
+        if (x + 1 < CHUNK_SIZE && z + d - 2 < CHUNK_SIZE) chunk[ct2Idx] = BLOCKS.CRAFTING_TABLE;
+        var bed2Idx = (x + w - 2) + (y + 4) * CHUNK_SIZE + (z + d - 2) * CHUNK_SIZE * WORLD_HEIGHT;
+        if (x + w - 2 < CHUNK_SIZE && z + d - 2 < CHUNK_SIZE) chunk[bed2Idx] = BLOCKS.BED;
+    }
+}
+
+function buildWell(chunk, x, y, z) {
+    // Well structure
+    for (var wx = -1; wx <= 1; wx++) {
+        for (var wz = -1; wz <= 1; wz++) {
+            for (var wy = -3; wy <= 1; wy++) {
+                var idx = (x + wx) + (y + wy) * CHUNK_SIZE + (z + wz) * CHUNK_SIZE * WORLD_HEIGHT;
+                if (x + wx < 0 || x + wx >= CHUNK_SIZE || z + wz < 0 || z + wz >= CHUNK_SIZE) continue;
+                if (y + wy < 0 || y + wy >= WORLD_HEIGHT) continue;
+
+                if (wx === 0 && wz === 0) {
+                    chunk[idx] = wy < 0 ? BLOCKS.WATER : BLOCKS.AIR;
+                } else if (wy === 1 || wy === -3) {
+                    chunk[idx] = BLOCKS.STONE;
+                } else if (Math.abs(wx) === 1 && Math.abs(wz) === 1) {
+                    chunk[idx] = BLOCKS.STONE;
+                }
+            }
+        }
+    }
+}
+
+function spawnMobsInChunk(cx, cz) {
+    var worldX = cx * CHUNK_SIZE;
+    var worldZ = cz * CHUNK_SIZE;
+    var biome = getBiome(worldX + 8, worldZ + 8);
+
+    // Spawn pigs in grassland and forest
+    if (biome === 'grassland' || biome === 'forest') {
+        var pigCount = Math.floor(noise2D(cx, cz, 5555) * 3);
+        for (var i = 0; i < pigCount; i++) {
+            var px = worldX + noise2D(i, cx, 6666) * CHUNK_SIZE;
+            var pz = worldZ + noise2D(i, cz, 7777) * CHUNK_SIZE;
+            var py = getWorldGroundHeight(px, pz) + 1;
+            mobs.push({
+                type: 'pig',
+                x: px, y: py, z: pz,
+                vx: 0, vy: 0, vz: 0,
+                health: 10,
+                targetX: px, targetZ: pz,
+                moveTimer: 0
+            });
+        }
+    }
+
+    // Spawn zombies at night (simplified: random spawn)
+    if (noise2D(cx * 2, cz * 2, 8888) > 0.85) {
+        var zx = worldX + noise2D(cx, cz, 1234) * CHUNK_SIZE;
+        var zz = worldZ + noise2D(cz, cx, 4321) * CHUNK_SIZE;
+        var zy = getWorldGroundHeight(zx, zz) + 1;
+        mobs.push({
+            type: 'zombie',
+            x: zx, y: zy, z: zz,
+            vx: 0, vy: 0, vz: 0,
+            health: 20,
+            attackCooldown: 0
+        });
+    }
+
+    // Spawn villagers in villages
+    if (isVillage(worldX + 8, worldZ + 8)) {
+        var villagerCount = 3 + Math.floor(noise2D(cx, cz, 9999) * 4);
+        for (var i = 0; i < villagerCount; i++) {
+            var vx = worldX + 4 + noise2D(i * 2, cx, 1111) * (CHUNK_SIZE - 8);
+            var vz = worldZ + 4 + noise2D(i * 2, cz, 2222) * (CHUNK_SIZE - 8);
+            var vy = getWorldGroundHeight(vx, vz) + 1;
+            mobs.push({
+                type: 'villager',
+                x: vx, y: vy, z: vz,
+                vx: 0, vy: 0, vz: 0,
+                health: 20,
+                targetX: vx, targetZ: vz,
+                moveTimer: 0
+            });
+        }
+    }
+}
+
+function getWorldGroundHeight(wx, wz) {
+    var cx = Math.floor(wx / CHUNK_SIZE);
+    var cz = Math.floor(wz / CHUNK_SIZE);
+    var key = cx + ',' + cz;
+    if (!chunks[key]) return SEA_LEVEL;
+
+    var localX = Math.floor(wx) - cx * CHUNK_SIZE;
+    var localZ = Math.floor(wz) - cz * CHUNK_SIZE;
+    if (localX < 0) localX += CHUNK_SIZE;
+    if (localZ < 0) localZ += CHUNK_SIZE;
+
+    for (var y = WORLD_HEIGHT - 1; y >= 0; y--) {
+        var block = getBlock(Math.floor(wx), y, Math.floor(wz));
+        if (block !== BLOCKS.AIR && block !== BLOCKS.WATER && block !== BLOCKS.LEAVES &&
+            block !== BLOCKS.TALL_GRASS && block !== BLOCKS.FLOWER_RED && block !== BLOCKS.FLOWER_YELLOW) {
+            return y;
+        }
+    }
+    return SEA_LEVEL;
+}
+
+function getBlock(x, y, z) {
+    var cx = Math.floor(x / CHUNK_SIZE);
+    var cz = Math.floor(z / CHUNK_SIZE);
+    var key = cx + ',' + cz;
+    if (!chunks[key]) return BLOCKS.AIR;
+
+    var localX = x - cx * CHUNK_SIZE;
+    var localZ = z - cz * CHUNK_SIZE;
+    if (localX < 0) localX += CHUNK_SIZE;
+    if (localZ < 0) localZ += CHUNK_SIZE;
+    if (y < 0 || y >= WORLD_HEIGHT) return BLOCKS.AIR;
+
+    var idx = localX + y * CHUNK_SIZE + localZ * CHUNK_SIZE * WORLD_HEIGHT;
+    return chunks[key][idx];
+}
+
+function setBlock(x, y, z, block) {
+    var cx = Math.floor(x / CHUNK_SIZE);
+    var cz = Math.floor(z / CHUNK_SIZE);
+    var key = cx + ',' + cz;
+    if (!chunks[key]) return;
+
+    var localX = x - cx * CHUNK_SIZE;
+    var localZ = z - cz * CHUNK_SIZE;
+    if (localX < 0) localX += CHUNK_SIZE;
+    if (localZ < 0) localZ += CHUNK_SIZE;
+    if (y < 0 || y >= WORLD_HEIGHT) return;
+
+    var idx = localX + y * CHUNK_SIZE + localZ * CHUNK_SIZE * WORLD_HEIGHT;
+    chunks[key][idx] = block;
+}
+
+// 3D Rendering
+function worldToCamera(p) {
+    var dx = p[0] - player.x;
+    var dy = p[1] - player.y - 1.6;
+    var dz = p[2] - player.z;
+    var cy = Math.cos(-player.yaw), sy = Math.sin(-player.yaw);
+    var cp = Math.cos(-player.pitch), sp = Math.sin(-player.pitch);
+    var x1 = dx * cy - dz * sy;
+    var z1 = dx * sy + dz * cy;
+    return [x1, dy * cp - z1 * sp, dy * sp + z1 * cp];
+}
+
+function project(c) {
+    if (c[2] < 0.1) return null;
+    var f = 400 / c[2];
+    return { x: c[0] * f + canvas.width / 2, y: -c[1] * f + canvas.height / 2, z: c[2] };
+}
+
+function drawBlockFace(vertices, color, shade) {
+    var camVerts = vertices.map(worldToCamera);
+
+    // Check if behind camera
+    var allBehind = true;
+    for (var i = 0; i < camVerts.length; i++) {
+        if (camVerts[i][2] >= 0.1) allBehind = false;
+    }
+    if (allBehind) return;
+
+    // Clip to near plane (simplified)
+    var projected = [];
+    for (var i = 0; i < camVerts.length; i++) {
+        var p = project(camVerts[i]);
+        if (p) projected.push(p);
+    }
+    if (projected.length < 3) return;
+
+    // Backface culling
+    var v1x = projected[1].x - projected[0].x;
+    var v1y = projected[1].y - projected[0].y;
+    var v2x = projected[2].x - projected[0].x;
+    var v2y = projected[2].y - projected[0].y;
+    if (v1x * v2y - v1y * v2x > 0) return;
+
+    // Parse color and apply shade
+    var r = parseInt(color.slice(1, 3), 16);
+    var g = parseInt(color.slice(3, 5), 16);
+    var b = parseInt(color.slice(5, 7), 16);
+    r = Math.floor(r * shade);
+    g = Math.floor(g * shade);
+    b = Math.floor(b * shade);
+
+    ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+    ctx.beginPath();
+    ctx.moveTo(projected[0].x, projected[0].y);
+    for (var i = 1; i < projected.length; i++) {
+        ctx.lineTo(projected[i].x, projected[i].y);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    // Wireframe
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+}
+
+function drawBlock(x, y, z, block) {
+    var color = BLOCK_COLORS[block];
+    if (!color) return;
+
+    // Only draw faces that are exposed
+    var faces = [];
+
+    // Top face (y+1)
+    if (getBlock(x, y + 1, z) === BLOCKS.AIR || getBlock(x, y + 1, z) === BLOCKS.WATER) {
+        faces.push({
+            verts: [[x, y + 1, z], [x + 1, y + 1, z], [x + 1, y + 1, z + 1], [x, y + 1, z + 1]],
+            shade: 1.0, z: y + 1
+        });
+    }
+    // Bottom face (y-1)
+    if (y === 0 || getBlock(x, y - 1, z) === BLOCKS.AIR) {
+        faces.push({
+            verts: [[x, y, z + 1], [x + 1, y, z + 1], [x + 1, y, z], [x, y, z]],
+            shade: 0.5, z: y
+        });
+    }
+    // Front face (z+1)
+    if (getBlock(x, y, z + 1) === BLOCKS.AIR || getBlock(x, y, z + 1) === BLOCKS.WATER) {
+        faces.push({
+            verts: [[x, y, z + 1], [x, y + 1, z + 1], [x + 1, y + 1, z + 1], [x + 1, y, z + 1]],
+            shade: 0.8, z: z + 1
+        });
+    }
+    // Back face (z-1)
+    if (getBlock(x, y, z - 1) === BLOCKS.AIR || getBlock(x, y, z - 1) === BLOCKS.WATER) {
+        faces.push({
+            verts: [[x + 1, y, z], [x + 1, y + 1, z], [x, y + 1, z], [x, y, z]],
+            shade: 0.8, z: z
+        });
+    }
+    // Right face (x+1)
+    if (getBlock(x + 1, y, z) === BLOCKS.AIR || getBlock(x + 1, y, z) === BLOCKS.WATER) {
+        faces.push({
+            verts: [[x + 1, y, z + 1], [x + 1, y + 1, z + 1], [x + 1, y + 1, z], [x + 1, y, z]],
+            shade: 0.7, z: x + 1
+        });
+    }
+    // Left face (x-1)
+    if (getBlock(x - 1, y, z) === BLOCKS.AIR || getBlock(x - 1, y, z) === BLOCKS.WATER) {
+        faces.push({
+            verts: [[x, y, z], [x, y + 1, z], [x, y + 1, z + 1], [x, y, z + 1]],
+            shade: 0.7, z: x
+        });
+    }
+
+    for (var i = 0; i < faces.length; i++) {
+        drawBlockFace(faces[i].verts, color, faces[i].shade);
+    }
+}
+
+function drawMob(mob) {
+    var color = mob.type === 'zombie' ? '#5a8a5a' : mob.type === 'pig' ? '#ffaaaa' : '#b08060';
+    var w = 0.6, h = mob.type === 'pig' ? 0.8 : 1.8, d = mob.type === 'pig' ? 1.0 : 0.6;
+
+    var faces = [
+        { verts: [[mob.x - w/2, mob.y + h, mob.z - d/2], [mob.x + w/2, mob.y + h, mob.z - d/2],
+                  [mob.x + w/2, mob.y + h, mob.z + d/2], [mob.x - w/2, mob.y + h, mob.z + d/2]], shade: 1.0 },
+        { verts: [[mob.x - w/2, mob.y, mob.z + d/2], [mob.x + w/2, mob.y, mob.z + d/2],
+                  [mob.x + w/2, mob.y, mob.z - d/2], [mob.x - w/2, mob.y, mob.z - d/2]], shade: 0.5 },
+        { verts: [[mob.x - w/2, mob.y, mob.z + d/2], [mob.x - w/2, mob.y + h, mob.z + d/2],
+                  [mob.x + w/2, mob.y + h, mob.z + d/2], [mob.x + w/2, mob.y, mob.z + d/2]], shade: 0.8 },
+        { verts: [[mob.x + w/2, mob.y, mob.z - d/2], [mob.x + w/2, mob.y + h, mob.z - d/2],
+                  [mob.x - w/2, mob.y + h, mob.z - d/2], [mob.x - w/2, mob.y, mob.z - d/2]], shade: 0.8 },
+        { verts: [[mob.x + w/2, mob.y, mob.z + d/2], [mob.x + w/2, mob.y + h, mob.z + d/2],
+                  [mob.x + w/2, mob.y + h, mob.z - d/2], [mob.x + w/2, mob.y, mob.z - d/2]], shade: 0.7 },
+        { verts: [[mob.x - w/2, mob.y, mob.z - d/2], [mob.x - w/2, mob.y + h, mob.z - d/2],
+                  [mob.x - w/2, mob.y + h, mob.z + d/2], [mob.x - w/2, mob.y, mob.z + d/2]], shade: 0.7 }
+    ];
+
+    for (var i = 0; i < faces.length; i++) {
+        drawBlockFace(faces[i].verts, color, faces[i].shade);
+    }
+}
+
+function render() {
+    // Sky gradient
+    var gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    gradient.addColorStop(0, '#4a90d9');
+    gradient.addColorStop(1, '#87CEEB');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    var px = Math.floor(player.x);
+    var py = Math.floor(player.y);
+    var pz = Math.floor(player.z);
+
+    // Collect visible faces
+    var visibleBlocks = [];
+    var renderDist = 32;
+
+    for (var x = px - renderDist; x <= px + renderDist; x++) {
+        for (var z = pz - renderDist; z <= pz + renderDist; z++) {
+            for (var y = 0; y < WORLD_HEIGHT; y++) {
+                var block = getBlock(x, y, z);
+                if (block !== BLOCKS.AIR && block !== BLOCKS.WATER) {
+                    var dx = x + 0.5 - player.x;
+                    var dy = y + 0.5 - player.y;
+                    var dz = z + 0.5 - player.z;
+                    var dist = dx * dx + dy * dy + dz * dz;
+                    visibleBlocks.push({ x: x, y: y, z: z, block: block, dist: dist });
+                }
+            }
+        }
+    }
+
+    // Sort by distance (far to near)
+    visibleBlocks.sort(function(a, b) { return b.dist - a.dist; });
+
+    // Draw blocks
+    for (var i = 0; i < visibleBlocks.length; i++) {
+        var b = visibleBlocks[i];
+        drawBlock(b.x, b.y, b.z, b.block);
+    }
+
+    // Draw mobs
+    for (var i = 0; i < mobs.length; i++) {
+        var mob = mobs[i];
+        var dx = mob.x - player.x;
+        var dz = mob.z - player.z;
+        if (dx * dx + dz * dz < renderDist * renderDist) {
+            drawMob(mob);
+        }
+    }
+
+    // Draw dropped items
+    for (var i = 0; i < droppedItems.length; i++) {
+        var item = droppedItems[i];
+        var cam = worldToCamera([item.x, item.y + 0.2, item.z]);
+        var p = project(cam);
+        if (p) {
+            ctx.fillStyle = ITEM_COLORS[item.item] || '#fff';
+            ctx.fillRect(p.x - 5, p.y - 5, 10, 10);
+        }
+    }
+}
+
+// Raycast for block selection
+function raycast(maxDist) {
+    var dx = -Math.sin(player.yaw) * Math.cos(player.pitch);
+    var dy = Math.sin(player.pitch);
+    var dz = Math.cos(player.yaw) * Math.cos(player.pitch);
+
+    var x = player.x, y = player.y + 1.6, z = player.z;
+    var prevX = Math.floor(x), prevY = Math.floor(y), prevZ = Math.floor(z);
+
+    for (var t = 0; t < maxDist; t += 0.1) {
+        x = player.x + dx * t;
+        y = player.y + 1.6 + dy * t;
+        z = player.z + dz * t;
+
+        var bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z);
+        var block = getBlock(bx, by, bz);
+
+        if (block !== BLOCKS.AIR && block !== BLOCKS.WATER &&
+            block !== BLOCKS.TALL_GRASS && block !== BLOCKS.FLOWER_RED && block !== BLOCKS.FLOWER_YELLOW) {
+            return { x: bx, y: by, z: bz, block: block, prevX: prevX, prevY: prevY, prevZ: prevZ };
+        }
+
+        if (bx !== prevX || by !== prevY || bz !== prevZ) {
+            prevX = bx; prevY = by; prevZ = bz;
+        }
+    }
+    return null;
+}
+
+// Mining
+var miningBlock = null;
+var miningProgress = 0;
+
+function getMiningSpeed(block) {
+    var tool = getSelectedItem();
+    var toolType = tool ? tool.item : null;
+
+    var baseTime = 1.0;
+    if (block === BLOCKS.STONE || block === BLOCKS.IRON_ORE) baseTime = 3.0;
+    else if (block === BLOCKS.LOG) baseTime = 2.0;
+    else if (block === BLOCKS.DIRT || block === BLOCKS.GRASS) baseTime = 0.5;
+
+    var speedMult = 1.0;
+
+    if (block === BLOCKS.LOG || block === BLOCKS.PLANKS) {
+        if (toolType === 'wood_axe') speedMult = 1.5;
+        else if (toolType === 'stone_axe') speedMult = 2.0;
+        else if (toolType === 'iron_axe') speedMult = 3.0;
+    } else if (block === BLOCKS.STONE) {
+        if (toolType === 'wood_pickaxe') speedMult = 1.5;
+        else if (toolType === 'stone_pickaxe') speedMult = 2.0;
+        else if (toolType === 'iron_pickaxe') speedMult = 3.0;
+    } else if (block === BLOCKS.IRON_ORE) {
+        if (toolType === 'stone_pickaxe') speedMult = 1.5;
+        else if (toolType === 'iron_pickaxe') speedMult = 2.0;
+    }
+
+    return baseTime / speedMult;
+}
+
+function canDropBlock(block) {
+    var tool = getSelectedItem();
+    var toolType = tool ? tool.item : null;
+
+    if (block === BLOCKS.STONE) {
+        return toolType === 'wood_pickaxe' || toolType === 'stone_pickaxe' || toolType === 'iron_pickaxe';
+    }
+    if (block === BLOCKS.IRON_ORE) {
+        return toolType === 'stone_pickaxe' || toolType === 'iron_pickaxe';
+    }
+    return true;
+}
+
+function getBlockDrop(block) {
+    if (block === BLOCKS.LOG) return 'wood';
+    if (block === BLOCKS.STONE) return 'stone';
+    if (block === BLOCKS.IRON_ORE) return 'iron';
+    if (block === BLOCKS.DIRT || block === BLOCKS.GRASS) return 'dirt';
+    if (block === BLOCKS.FLOWER_RED || block === BLOCKS.FLOWER_YELLOW) return 'flower';
+    return null;
+}
+
+function mineBlock(target) {
+    if (!target) return;
+
+    var mineTime = getMiningSpeed(target.block);
+
+    if (miningBlock && miningBlock.x === target.x && miningBlock.y === target.y && miningBlock.z === target.z) {
+        miningProgress += 1/60;
+        if (miningProgress >= mineTime) {
+            // Block broken
+            if (canDropBlock(target.block)) {
+                var drop = getBlockDrop(target.block);
+                if (drop) {
+                    droppedItems.push({
+                        item: drop,
+                        count: 1,
+                        x: target.x + 0.5,
+                        y: target.y + 0.5,
+                        z: target.z + 0.5,
+                        vy: 0.1
+                    });
+                }
+            }
+            setBlock(target.x, target.y, target.z, BLOCKS.AIR);
+            miningBlock = null;
+            miningProgress = 0;
+        }
+    } else {
+        miningBlock = { x: target.x, y: target.y, z: target.z };
+        miningProgress = 0;
+    }
+}
+
+// Inventory functions
+function getSelectedItem() {
+    return player.inventory[player.hotbarSlot];
+}
+
+function addToInventory(item, count) {
+    // Try to stack
+    for (var i = 0; i < player.inventory.length; i++) {
+        if (player.inventory[i] && player.inventory[i].item === item) {
+            player.inventory[i].count += count;
+            return true;
+        }
+    }
+    // Find empty slot
+    for (var i = 0; i < player.inventory.length; i++) {
+        if (!player.inventory[i]) {
+            player.inventory[i] = { item: item, count: count };
+            return true;
+        }
+    }
+    return false;
+}
+
+function removeFromInventory(item, count) {
+    for (var i = 0; i < player.inventory.length; i++) {
+        if (player.inventory[i] && player.inventory[i].item === item) {
+            player.inventory[i].count -= count;
+            if (player.inventory[i].count <= 0) {
+                player.inventory[i] = null;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+function countItem(item) {
+    var total = 0;
+    for (var i = 0; i < player.inventory.length; i++) {
+        if (player.inventory[i] && player.inventory[i].item === item) {
+            total += player.inventory[i].count;
+        }
+    }
+    return total;
+}
+
+function canCraft(recipe) {
+    if (recipe.needsTable && !player.nearCraftingTable) return false;
+    for (var item in recipe.cost) {
+        if (countItem(item) < recipe.cost[item]) return false;
+    }
+    return true;
+}
+
+function craft(recipe) {
+    if (!canCraft(recipe)) return false;
+    for (var item in recipe.cost) {
+        removeFromInventory(item, recipe.cost[item]);
+    }
+    addToInventory(recipe.result, recipe.count);
+    return true;
+}
+
+// Place block
+function placeBlock(target) {
+    if (!target) return;
+
+    var selected = getSelectedItem();
+    if (!selected) return;
+
+    var blockToPlace = null;
+    if (selected.item === 'wood') blockToPlace = BLOCKS.PLANKS;
+    else if (selected.item === 'stone') blockToPlace = BLOCKS.STONE;
+    else if (selected.item === 'iron') blockToPlace = BLOCKS.IRON_ORE;
+    else if (selected.item === 'dirt') blockToPlace = BLOCKS.DIRT;
+    else if (selected.item === 'crafting_table') blockToPlace = BLOCKS.CRAFTING_TABLE;
+    else if (selected.item === 'flower') blockToPlace = BLOCKS.FLOWER_RED;
+
+    if (blockToPlace !== null) {
+        // Check if flower can only be placed on dirt/grass
+        if (selected.item === 'flower') {
+            var below = getBlock(target.prevX, target.prevY - 1, target.prevZ);
+            if (below !== BLOCKS.DIRT && below !== BLOCKS.GRASS) return;
+        }
+
+        // Check player collision
+        var px = Math.floor(player.x), py = Math.floor(player.y), pz = Math.floor(player.z);
+        if (target.prevX === px && target.prevZ === pz &&
+            (target.prevY === py || target.prevY === py + 1)) return;
+
+        setBlock(target.prevX, target.prevY, target.prevZ, blockToPlace);
+        removeFromInventory(selected.item, 1);
+    }
+}
+
+// Combat
+function attack() {
+    var tool = getSelectedItem();
+    var damage = 1;
+
+    if (tool) {
+        if (tool.item === 'wood_sword') damage = 3;
+        else if (tool.item === 'stone_sword') damage = 5;
+        else if (tool.item === 'iron_sword') damage = 7;
+        else if (tool.item === 'akm') damage = 15;
+    }
+
+    // Check for mob in front
+    var dx = -Math.sin(player.yaw) * Math.cos(player.pitch);
+    var dy = Math.sin(player.pitch);
+    var dz = Math.cos(player.yaw) * Math.cos(player.pitch);
+
+    for (var i = 0; i < mobs.length; i++) {
+        var mob = mobs[i];
+        var mdx = mob.x - player.x;
+        var mdy = mob.y + 0.9 - player.y - 1.6;
+        var mdz = mob.z - player.z;
+        var dist = Math.sqrt(mdx * mdx + mdy * mdy + mdz * mdz);
+
+        var range = tool && tool.item === 'akm' ? 30 : 4;
+
+        if (dist < range) {
+            // Check if in front
+            var dot = (mdx * dx + mdy * dy + mdz * dz) / dist;
+            if (dot > 0.8) {
+                mob.health -= damage;
+                mob.vx = dx * 0.5;
+                mob.vz = dz * 0.5;
+                mob.vy = 0.2;
+
+                if (mob.health <= 0) {
+                    // Drop items
+                    if (mob.type === 'pig') {
+                        var porkCount = 2 + Math.floor(Math.random() * 2);
+                        for (var j = 0; j < porkCount; j++) {
+                            droppedItems.push({
+                                item: 'pork',
+                                count: 1,
+                                x: mob.x + (Math.random() - 0.5),
+                                y: mob.y + 0.5,
+                                z: mob.z + (Math.random() - 0.5),
+                                vy: 0.15
+                            });
+                        }
+                    }
+                    mobs.splice(i, 1);
+                }
+                break;
+            }
+        }
+    }
+}
+
+// Use item (eat pork)
+function useItem() {
+    var selected = getSelectedItem();
+    if (!selected) return;
+
+    if (selected.item === 'pork' && player.health < player.maxHealth) {
+        player.health = Math.min(player.maxHealth, player.health + 3);
+        removeFromInventory('pork', 1);
+        updateHealthBar();
+    }
+}
+
+// Physics update
+function updatePhysics() {
+    if (inventoryOpen) return;
+
+    var moveX = 0, moveZ = 0;
+    if (keys['KeyW'] || keys['ArrowUp']) moveZ = 1;
+    if (keys['KeyS'] || keys['ArrowDown']) moveZ = -1;
+    if (keys['KeyA'] || keys['ArrowLeft']) moveX = -1;
+    if (keys['KeyD'] || keys['ArrowRight']) moveX = 1;
+
+    var speed = keys['ShiftLeft'] ? 0.04 : 0.08;
+    var cosYaw = Math.cos(player.yaw);
+    var sinYaw = Math.sin(player.yaw);
+
+    player.vx += (moveX * cosYaw + moveZ * -sinYaw) * speed;
+    player.vz += (moveX * sinYaw + moveZ * cosYaw) * speed;
+    player.vy -= 0.015;
+
+    if (keys['Space'] && player.onGround) {
+        player.vy = 0.25;
+        player.onGround = false;
+    }
+
+    player.vx *= 0.85;
+    player.vz *= 0.85;
+
+    // Collision detection
+    var nx = player.x + player.vx;
+    var ny = player.y + player.vy;
+    var nz = player.z + player.vz;
+
+    // X collision
+    if (isCollidingAt(nx, player.y, player.z)) {
+        player.vx = 0;
+        nx = player.x;
+    }
+
+    // Z collision
+    if (isCollidingAt(nx, player.y, nz)) {
+        player.vz = 0;
+        nz = player.z;
+    }
+
+    // Y collision
+    player.onGround = false;
+    if (isCollidingAt(nx, ny, nz)) {
+        if (player.vy < 0) {
+            player.onGround = true;
+            ny = Math.floor(player.y) + 0.001;
+        }
+        player.vy = 0;
+    }
+
+    player.x = nx;
+    player.y = ny;
+    player.z = nz;
+
+    // Check for crafting table nearby
+    player.nearCraftingTable = false;
+    for (var dx = -2; dx <= 2; dx++) {
+        for (var dy = -2; dy <= 2; dy++) {
+            for (var dz = -2; dz <= 2; dz++) {
+                if (getBlock(Math.floor(player.x) + dx, Math.floor(player.y) + dy, Math.floor(player.z) + dz) === BLOCKS.CRAFTING_TABLE) {
+                    player.nearCraftingTable = true;
+                }
+            }
+        }
+    }
+
+    // Pickup items
+    for (var i = droppedItems.length - 1; i >= 0; i--) {
+        var item = droppedItems[i];
+        item.vy -= 0.01;
+        item.y += item.vy;
+
+        var groundY = getWorldGroundHeight(item.x, item.z) + 1;
+        if (item.y < groundY) {
+            item.y = groundY;
+            item.vy = 0;
+        }
+
+        var dx = item.x - player.x;
+        var dy = item.y - player.y - 1;
+        var dz = item.z - player.z;
+        if (dx * dx + dy * dy + dz * dz < 1.5) {
+            if (addToInventory(item.item, item.count)) {
+                droppedItems.splice(i, 1);
+            }
+        }
+    }
+
+    // Update mobs
+    updateMobs();
+
+    // Update UI
+    document.getElementById('pos').textContent = Math.floor(player.x) + ', ' + Math.floor(player.y) + ', ' + Math.floor(player.z);
+    document.getElementById('biome').textContent = getBiome(player.x, player.z);
+}
+
+function isCollidingAt(x, y, z) {
+    var px = [x - 0.3, x + 0.3];
+    var py = [y, y + 1.8];
+    var pz = [z - 0.3, z + 0.3];
+
+    for (var bx = Math.floor(px[0]); bx <= Math.floor(px[1]); bx++) {
+        for (var by = Math.floor(py[0]); by <= Math.floor(py[1]); by++) {
+            for (var bz = Math.floor(pz[0]); bz <= Math.floor(pz[1]); bz++) {
+                var block = getBlock(bx, by, bz);
+                if (block !== BLOCKS.AIR && block !== BLOCKS.WATER &&
+                    block !== BLOCKS.TALL_GRASS && block !== BLOCKS.FLOWER_RED &&
+                    block !== BLOCKS.FLOWER_YELLOW) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+function updateMobs() {
+    for (var i = 0; i < mobs.length; i++) {
+        var mob = mobs[i];
+
+        mob.vy -= 0.015;
+
+        if (mob.type === 'zombie') {
+            // Chase player
+            var dx = player.x - mob.x;
+            var dz = player.z - mob.z;
+            var dist = Math.sqrt(dx * dx + dz * dz);
+
+            if (dist < 20 && dist > 1) {
+                mob.vx += (dx / dist) * 0.02;
+                mob.vz += (dz / dist) * 0.02;
+            }
+
+            // Attack player
+            if (dist < 1.5 && mob.attackCooldown <= 0) {
+                player.health -= 2;
+                updateHealthBar();
+                mob.attackCooldown = 60;
+
+                if (player.health <= 0) {
+                    showMessage('You Died!');
+                    setTimeout(function() {
+                        hideMessage();
+                        respawnPlayer();
+                    }, 2000);
+                }
+            }
+            mob.attackCooldown--;
+
+        } else if (mob.type === 'pig' || mob.type === 'villager') {
+            // Random wandering
+            mob.moveTimer--;
+            if (mob.moveTimer <= 0) {
+                mob.targetX = mob.x + (Math.random() - 0.5) * 10;
+                mob.targetZ = mob.z + (Math.random() - 0.5) * 10;
+                mob.moveTimer = 100 + Math.random() * 200;
+            }
+
+            var dx = mob.targetX - mob.x;
+            var dz = mob.targetZ - mob.z;
+            var dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist > 0.5) {
+                mob.vx += (dx / dist) * 0.005;
+                mob.vz += (dz / dist) * 0.005;
+            }
+        }
+
+        mob.vx *= 0.9;
+        mob.vz *= 0.9;
+
+        mob.x += mob.vx;
+        mob.y += mob.vy;
+        mob.z += mob.vz;
+
+        // Ground collision
+        var groundY = getWorldGroundHeight(mob.x, mob.z) + 1;
+        if (mob.y < groundY) {
+            mob.y = groundY;
+            mob.vy = 0;
+        }
+    }
+}
+
+function respawnPlayer() {
+    player.x = 0;
+    player.y = 30;
+    player.z = 0;
+    player.health = player.maxHealth;
+    updateHealthBar();
+}
+
+// UI Updates
+function updateHotbar() {
+    var hotbar = document.getElementById('hotbar');
+    hotbar.innerHTML = '';
+
+    for (var i = 0; i < 9; i++) {
+        var slot = document.createElement('div');
+        slot.className = 'slot' + (i === player.hotbarSlot ? ' selected' : '');
+
+        var item = player.inventory[i];
+        if (item) {
+            slot.style.backgroundColor = ITEM_COLORS[item.item] || '#666';
+            slot.innerHTML = '<span style="font-size:8px">' + (ITEM_NAMES[item.item] || item.item) + '</span>' +
+                           '<span class="slot-count">' + item.count + '</span>';
+        }
+        hotbar.appendChild(slot);
+    }
+}
+
+function updateHealthBar() {
+    var bar = document.getElementById('health-bar');
+    bar.innerHTML = '';
+    for (var i = 0; i < player.maxHealth; i++) {
+        var heart = document.createElement('div');
+        heart.className = 'heart' + (i >= player.health ? ' empty' : '');
+        bar.appendChild(heart);
+    }
+}
+
+function updateInventoryUI() {
+    var grid = document.getElementById('inv-grid');
+    grid.innerHTML = '';
+
+    for (var i = 0; i < 36; i++) {
+        var slot = document.createElement('div');
+        slot.className = 'slot';
+
+        var item = player.inventory[i];
+        if (item) {
+            slot.style.backgroundColor = ITEM_COLORS[item.item] || '#666';
+            slot.innerHTML = '<span style="font-size:8px">' + (ITEM_NAMES[item.item] || item.item) + '</span>' +
+                           '<span class="slot-count">' + item.count + '</span>';
+        }
+        grid.appendChild(slot);
+    }
+
+    // Crafting buttons
+    var craftDiv = document.getElementById('craft-buttons');
+    craftDiv.innerHTML = '';
+
+    for (var i = 0; i < RECIPES.length; i++) {
+        var recipe = RECIPES[i];
+        var btn = document.createElement('button');
+        btn.className = 'craft-btn';
+        btn.disabled = !canCraft(recipe);
+        btn.style.opacity = canCraft(recipe) ? 1 : 0.5;
+
+        var costStr = '';
+        for (var mat in recipe.cost) {
+            costStr += recipe.cost[mat] + ' ' + mat + ' ';
+        }
+        btn.textContent = ITEM_NAMES[recipe.result] + ' (' + costStr.trim() + ')' +
+                         (recipe.needsTable ? ' [Table]' : '');
+
+        (function(r) {
+            btn.onclick = function() {
+                craft(r);
+                updateInventoryUI();
+                updateHotbar();
+            };
+        })(recipe);
+
+        craftDiv.appendChild(btn);
+    }
+}
+
+function showMessage(text) {
+    document.getElementById('message').textContent = text;
+    document.getElementById('message').style.display = 'block';
+}
+
+function hideMessage() {
+    document.getElementById('message').style.display = 'none';
+}
+
+// Input handling
+var mouseDown = false;
+
+document.addEventListener('keydown', function(e) {
+    keys[e.code] = true;
+
+    if (e.code === 'KeyE') {
+        inventoryOpen = !inventoryOpen;
+        document.getElementById('inventory').style.display = inventoryOpen ? 'block' : 'none';
+        if (inventoryOpen) {
+            document.exitPointerLock();
+            updateInventoryUI();
+        } else {
+            canvas.requestPointerLock();
+        }
+    }
+
+    if (e.code === 'KeyQ' && !inventoryOpen) {
+        var selected = getSelectedItem();
+        if (selected) {
+            droppedItems.push({
+                item: selected.item,
+                count: 1,
+                x: player.x - Math.sin(player.yaw) * 2,
+                y: player.y + 1.5,
+                z: player.z + Math.cos(player.yaw) * 2,
+                vy: 0.1
+            });
+            removeFromInventory(selected.item, 1);
+            updateHotbar();
+        }
+    }
+
+    // Number keys for hotbar
+    if (e.code >= 'Digit1' && e.code <= 'Digit9') {
+        player.hotbarSlot = parseInt(e.code.slice(5)) - 1;
+        updateHotbar();
+    }
+
+    if (e.code === 'Space') e.preventDefault();
+});
+
+document.addEventListener('keyup', function(e) {
+    keys[e.code] = false;
+});
+
+canvas.addEventListener('mousedown', function(e) {
+    if (!mouseLocked) {
+        canvas.requestPointerLock();
+        return;
+    }
+
+    mouseDown = true;
+
+    if (e.button === 0) {
+        attack();
+    } else if (e.button === 2) {
+        var target = raycast(5);
+        if (target) {
+            if (getBlock(target.x, target.y, target.z) === BLOCKS.CRAFTING_TABLE) {
+                // Open inventory when right-clicking crafting table
+                inventoryOpen = true;
+                document.getElementById('inventory').style.display = 'block';
+                document.exitPointerLock();
+                updateInventoryUI();
+            } else {
+                placeBlock(target);
+                updateHotbar();
+            }
+        } else {
+            useItem();
+            updateHotbar();
+        }
+    }
+});
+
+canvas.addEventListener('mouseup', function(e) {
+    mouseDown = false;
+    miningBlock = null;
+    miningProgress = 0;
+});
+
+canvas.addEventListener('contextmenu', function(e) {
+    e.preventDefault();
+});
+
+document.addEventListener('pointerlockchange', function() {
+    mouseLocked = document.pointerLockElement === canvas;
+});
+
+document.addEventListener('mousemove', function(e) {
+    if (!mouseLocked || inventoryOpen) return;
+    player.yaw -= e.movementX * 0.002;
+    player.pitch += e.movementY * 0.002;
+    player.pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, player.pitch));
+});
+
+window.addEventListener('resize', function() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+});
+
+// Generate initial chunks
+function generateNearbyChunks() {
+    var pcx = Math.floor(player.x / CHUNK_SIZE);
+    var pcz = Math.floor(player.z / CHUNK_SIZE);
+
+    for (var dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
+        for (var dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++) {
+            generateChunk(pcx + dx, pcz + dz);
+        }
+    }
+}
+
+// Main game loop
+var lastFrameTime = performance.now();
+
+function gameLoop() {
+    var now = performance.now();
+    var delta = now - lastFrameTime;
+    lastFrameTime = now;
+
+    frameCount++;
+    if (now - lastTime > 1000) {
+        fps = frameCount;
+        frameCount = 0;
+        lastTime = now;
+        document.getElementById('fps').textContent = fps;
+    }
+
+    generateNearbyChunks();
+
+    if (mouseDown && mouseLocked && !inventoryOpen) {
+        var target = raycast(5);
+        mineBlock(target);
+    }
+
+    updatePhysics();
+    render();
+    updateHotbar();
+
+    requestAnimationFrame(gameLoop);
+}
+
+// Find spawn point
+function findSpawnPoint() {
+    for (var i = 0; i < 100; i++) {
+        var x = (Math.random() - 0.5) * 100;
+        var z = (Math.random() - 0.5) * 100;
+        var biome = getBiome(x, z);
+        if (biome !== 'pond') {
+            player.x = x;
+            player.z = z;
+            generateNearbyChunks();
+            player.y = getWorldGroundHeight(x, z) + 2;
+            return;
+        }
+    }
+    player.y = 30;
+}
+
+// Initialize
+findSpawnPoint();
+updateHotbar();
+updateHealthBar();
+gameLoop();
+</script>
+</body>
+</html>
+```
