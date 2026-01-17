@@ -464,12 +464,13 @@ function canDrop(b) {
 }
 
 function getDropItem(b) {
-    if (b === BLOCKS.LOG) return 'wood';
-    if (b === BLOCKS.STONE) return 'stone';
-    if (b === BLOCKS.IRON_ORE) return 'iron';
-    if (b === BLOCKS.DIRT || b === BLOCKS.GRASS) return 'dirt';
-    if (b === BLOCKS.FLOWER_RED || b === BLOCKS.FLOWER_YELLOW) return 'flower';
-    if (b === BLOCKS.CRAFTING_TABLE) return 'crafting_table';
+    if (b === 4 || b === 12) return 'wood';  // LOG, PLANKS
+    if (b === 3) return 'stone';  // STONE
+    if (b === 8) return 'iron';   // IRON_ORE
+    if (b === 2 || b === 1) return 'dirt';  // DIRT, GRASS
+    if (b === 9 || b === 10) return 'flower';  // FLOWERS
+    if (b === 13) return 'crafting_table';  // CRAFTING_TABLE
+    if (b === 5) return 'wood';   // LEAVES also drops wood
     return null;
 }
 
