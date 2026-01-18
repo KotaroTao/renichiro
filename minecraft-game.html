@@ -110,11 +110,19 @@ function getBiome(x, z) {
     var h = fbm(x, z, 1), m = fbm(x, z, 2);
     if (h > 0.6) return 'mountain';
     if (m > 0.55 && h < 0.35) return 'pond';
+    // Village biome on flat plains
+    var vHash = hash(Math.floor(x/100), Math.floor(z/100), 999);
+    if (vHash > 0.85 && h < 0.4 && m >= 0.4 && m < 0.55) return 'village';
     if (m < 0.4) return 'grassland';
     return 'forest';
 }
 
-function isVillage(x, z) { return hash(Math.floor(x/150), Math.floor(z/150), 999) > 0.8; }
+function isVillageCenter(x, z) {
+    var vcx = Math.floor(x/100) * 100 + 50;
+    var vcz = Math.floor(z/100) * 100 + 50;
+    var dx = x - vcx, dz = z - vcz;
+    return dx*dx + dz*dz < 900; // Within radius 30
+}
 
 function genChunk(cx, cz) {
     var key = cx + ',' + cz;
@@ -145,8 +153,8 @@ function genChunk(cx, cz) {
                 }
             }
 
-            // Vegetation
-            if (data[lx + baseH * CHUNK_SIZE + lz * CHUNK_SIZE * WORLD_HEIGHT] === BLOCKS.GRASS) {
+            // Vegetation (reduced frequency)
+            if (data[lx + baseH * CHUNK_SIZE + lz * CHUNK_SIZE * WORLD_HEIGHT] === BLOCKS.GRASS && biome !== 'village') {
                 var vn = hash(wx * 3, wz * 3, 333);
                 if (biome === 'forest' && vn > 0.88 && lx > 1 && lx < 14 && lz > 1 && lz < 14) {
                     var th = 4 + Math.floor(hash(wx, wz, 444) * 3);
@@ -162,33 +170,42 @@ function genChunk(cx, cz) {
                             }
                         }
                     }
-                } else if (vn > 0.5) {
-                    if (baseH + 1 < WORLD_HEIGHT) data[lx + (baseH + 1) * CHUNK_SIZE + lz * CHUNK_SIZE * WORLD_HEIGHT] = vn > 0.7 ? (hash(wx, wz, 555) > 0.5 ? BLOCKS.FLOWER_RED : BLOCKS.FLOWER_YELLOW) : BLOCKS.TALL_GRASS;
+                } else if (vn > 0.92) {
+                    // Reduced: flowers/grass spawn less frequently (was 0.5, now 0.92)
+                    if (baseH + 1 < WORLD_HEIGHT) data[lx + (baseH + 1) * CHUNK_SIZE + lz * CHUNK_SIZE * WORLD_HEIGHT] = vn > 0.96 ? (hash(wx, wz, 555) > 0.5 ? BLOCKS.FLOWER_RED : BLOCKS.FLOWER_YELLOW) : BLOCKS.TALL_GRASS;
                 }
             }
         }
     }
 
     chunks[key] = data;
-    if (isVillage(wx0 + 8, wz0 + 8)) genVillage(cx, cz, data);
+    // Generate village if this chunk is in village biome
+    var centerBiome = getBiome(wx0 + 8, wz0 + 8);
+    if (centerBiome === 'village') genVillage(cx, cz, data);
     spawnMobs(cx, cz);
     return data;
 }
 
 function genVillage(cx, cz, data) {
     var wx0 = cx * CHUNK_SIZE, wz0 = cz * CHUNK_SIZE;
-    var vcx = Math.floor(wx0 / 150) * 150 + 75, vcz = Math.floor(wz0 / 150) * 150 + 75;
-    if (wx0 <= vcx && vcx < wx0 + 16 && wz0 <= vcz && vcz < wz0 + 16) {
-        var houses = 6 + Math.floor(hash(vcx, vcz, 888) * 4);
-        for (var h = 0; h < houses; h++) {
-            var ang = h / houses * Math.PI * 2, dist = 6 + hash(h, vcx, 999) * 10;
-            var hx = Math.floor(vcx + Math.cos(ang) * dist) - wx0;
-            var hz = Math.floor(vcz + Math.sin(ang) * dist) - wz0;
-            if (hx >= 2 && hx < 12 && hz >= 2 && hz < 12) {
-                var gy = findGround(data, hx, hz);
-                buildHouse(data, hx, gy, hz, hash(h, vcz, 111) > 0.7);
-            }
+    var vcx = Math.floor(wx0 / 100) * 100 + 50, vcz = Math.floor(wz0 / 100) * 100 + 50;
+
+    // Generate houses spread across the village biome
+    var numHouses = 2 + Math.floor(hash(cx, cz, 888) * 3);
+    for (var h = 0; h < numHouses; h++) {
+        var hx = 2 + Math.floor(hash(h * 3, cx + cz, 123) * 10);
+        var hz = 2 + Math.floor(hash(h * 3 + 1, cx - cz, 456) * 10);
+        if (hx >= 2 && hx < 11 && hz >= 2 && hz < 11) {
+            var gy = findGround(data, hx, hz);
+            buildHouse(data, hx, gy, hz, hash(h, cx + cz, 111) > 0.7);
         }
+    }
+
+    // Add well at center area
+    if (hash(cx * 2, cz * 2, 789) > 0.7) {
+        var wx = 7, wz = 7;
+        var gy = findGround(data, wx, wz);
+        buildWell(data, wx, gy, wz);
     }
 }
 
@@ -209,9 +226,29 @@ function buildHouse(data, x, y, z, big) {
         else if (hx === 0 || hx === w-1 || hz === 0 || hz === d-1) data[idx] = (hy === 2 && (hx === w/2|0 || hz === d/2|0)) ? BLOCKS.GLASS : BLOCKS.PLANKS;
         else data[idx] = 0;
     }
+    // Door opening
     var di = (x + (w/2|0)) + (y + 1) * CHUNK_SIZE + z * CHUNK_SIZE * WORLD_HEIGHT;
     if (x + (w/2|0) < 16) { data[di] = 0; data[di + CHUNK_SIZE] = 0; }
+    // Crafting table
     if (x + 1 < 16 && z + 1 < 16) data[(x+1) + (y+1) * CHUNK_SIZE + (z+1) * CHUNK_SIZE * WORLD_HEIGHT] = BLOCKS.CRAFTING_TABLE;
+    // Bed inside (for big house, 2 beds)
+    if (x + w - 2 < 16 && z + 1 < 16) data[(x+w-2) + (y+1) * CHUNK_SIZE + (z+1) * CHUNK_SIZE * WORLD_HEIGHT] = BLOCKS.BED;
+    if (big && x + w - 2 < 16 && z + 3 < 16) data[(x+w-2) + (y+1) * CHUNK_SIZE + (z+3) * CHUNK_SIZE * WORLD_HEIGHT] = BLOCKS.BED;
+}
+
+function buildWell(data, x, y, z) {
+    // Simple well: stone walls with water inside
+    for (var wx = -1; wx <= 1; wx++) for (var wz = -1; wz <= 1; wz++) {
+        if (x + wx < 0 || x + wx >= 16 || z + wz < 0 || z + wz >= 16) continue;
+        for (var wy = 0; wy <= 2; wy++) {
+            var idx = (x + wx) + (y + wy) * CHUNK_SIZE + (z + wz) * CHUNK_SIZE * WORLD_HEIGHT;
+            if (Math.abs(wx) === 1 || Math.abs(wz) === 1) {
+                data[idx] = BLOCKS.STONE; // Stone walls
+            } else if (wy < 2) {
+                data[idx] = BLOCKS.WATER; // Water inside
+            }
+        }
+    }
 }
 
 function spawnMobs(cx, cz) {
@@ -227,31 +264,31 @@ function spawnMobs(cx, cz) {
         var pc = Math.floor(hash(cx, cz, 555) * 2);
         for (var i = 0; i < pc; i++) {
             var px = wx0 + hash(i, cx, 666) * 16, pz = wz0 + hash(i, cz, 777) * 16;
-            mobs.push({ type:'pig', x:px, y:getGroundY(px, pz) + 1, z:pz, vx:0, vy:0, vz:0, hp:10, tx:px, tz:pz, timer:0, hurt:0 });
+            mobs.push({ type:'pig', x:px, y:getGroundY(px, pz) + 1, z:pz, vx:0, vy:0, vz:0, hp:10, tx:px, tz:pz, timer:0, hurt:0, facing:0 });
         }
     }
 
     // Sheep
-    if (biome === 'grassland') {
+    if (biome === 'grassland' || biome === 'village') {
         var sc = Math.floor(hash(cx + 1, cz + 1, 444) * 3);
         for (var i = 0; i < sc; i++) {
             var sx = wx0 + hash(i + 10, cx, 222) * 16, sz = wz0 + hash(i + 10, cz, 333) * 16;
-            mobs.push({ type:'sheep', x:sx, y:getGroundY(sx, sz) + 1, z:sz, vx:0, vy:0, vz:0, hp:8, tx:sx, tz:sz, timer:0, hurt:0 });
+            mobs.push({ type:'sheep', x:sx, y:getGroundY(sx, sz) + 1, z:sz, vx:0, vy:0, vz:0, hp:8, tx:sx, tz:sz, timer:0, hurt:0, facing:0 });
         }
     }
 
     // Zombies
     if (hash(cx * 2, cz * 2, 888) > 0.9) {
         var zx = wx0 + hash(cx, cz, 123) * 16, zz = wz0 + hash(cz, cx, 321) * 16;
-        mobs.push({ type:'zombie', x:zx, y:getGroundY(zx, zz) + 1, z:zz, vx:0, vy:0, vz:0, hp:20, atkCd:0, hurt:0 });
+        mobs.push({ type:'zombie', x:zx, y:getGroundY(zx, zz) + 1, z:zz, vx:0, vy:0, vz:0, hp:20, atkCd:0, hurt:0, facing:0 });
     }
 
-    // Villagers
-    if (isVillage(wx0 + 8, wz0 + 8)) {
+    // Villagers in village biome
+    if (biome === 'village') {
         var vc = 2 + Math.floor(hash(cx, cz, 999) * 3);
         for (var i = 0; i < vc; i++) {
             var vx = wx0 + 4 + hash(i * 2, cx, 111) * 8, vz = wz0 + 4 + hash(i * 2, cz, 222) * 8;
-            mobs.push({ type:'villager', x:vx, y:getGroundY(vx, vz) + 1, z:vz, vx:0, vy:0, vz:0, hp:20, tx:vx, tz:vz, timer:0, hurt:0 });
+            mobs.push({ type:'villager', x:vx, y:getGroundY(vx, vz) + 1, z:vz, vx:0, vy:0, vz:0, hp:20, tx:vx, tz:vz, timer:0, hurt:0, facing:0 });
         }
     }
 }
@@ -401,20 +438,48 @@ function drawMob(m) {
 
     var w = 0.4, h = m.type === 'pig' ? 0.6 : m.type === 'sheep' ? 0.8 : 1.6, d = (m.type === 'pig' || m.type === 'sheep') ? 0.8 : 0.4;
     var x = m.x, y = m.y, z = m.z;
+    var facing = m.facing || 0;
+    var cf = Math.cos(facing), sf = Math.sin(facing);
 
-    // Draw mob with rounded appearance (no outline)
-    drawMobFace([[x-w,y+h,z-d],[x+w,y+h,z-d],[x+w,y+h,z+d],[x-w,y+h,z+d]], baseColor, 1.0);
-    drawMobFace([[x-w,y,z+d],[x+w,y,z+d],[x+w,y,z-d],[x-w,y,z-d]], baseColor, 0.5);
-    drawMobFace([[x-w,y,z+d],[x-w,y+h,z+d],[x+w,y+h,z+d],[x+w,y,z+d]], baseColor, 0.7);
-    drawMobFace([[x+w,y,z-d],[x+w,y+h,z-d],[x-w,y+h,z-d],[x-w,y,z-d]], baseColor, 0.7);
-    drawMobFace([[x+w,y,z+d],[x+w,y+h,z+d],[x+w,y+h,z-d],[x+w,y,z-d]], baseColor, 0.8);
-    drawMobFace([[x-w,y,z-d],[x-w,y+h,z-d],[x-w,y+h,z+d],[x-w,y,z+d]], baseColor, 0.6);
+    // Rotate point around mob center
+    function rot(px, pz) {
+        var dx = px - x, dz = pz - z;
+        return [x + dx * cf - dz * sf, z + dx * sf + dz * cf];
+    }
 
-    // Draw eyes for mobs
+    // Draw mob with rotation based on facing direction
+    var corners = [
+        rot(x - w, z - d), rot(x + w, z - d), rot(x + w, z + d), rot(x - w, z + d)
+    ];
+
+    // Top face
+    drawMobFace([[corners[0][0],y+h,corners[0][1]],[corners[1][0],y+h,corners[1][1]],[corners[2][0],y+h,corners[2][1]],[corners[3][0],y+h,corners[3][1]]], baseColor, 1.0);
+    // Bottom face
+    drawMobFace([[corners[3][0],y,corners[3][1]],[corners[2][0],y,corners[2][1]],[corners[1][0],y,corners[1][1]],[corners[0][0],y,corners[0][1]]], baseColor, 0.5);
+    // Front face (facing direction = +z after rotation)
+    drawMobFace([[corners[3][0],y,corners[3][1]],[corners[3][0],y+h,corners[3][1]],[corners[2][0],y+h,corners[2][1]],[corners[2][0],y,corners[2][1]]], baseColor, 0.9);
+    // Back face
+    drawMobFace([[corners[1][0],y,corners[1][1]],[corners[1][0],y+h,corners[1][1]],[corners[0][0],y+h,corners[0][1]],[corners[0][0],y,corners[0][1]]], baseColor, 0.6);
+    // Right face
+    drawMobFace([[corners[2][0],y,corners[2][1]],[corners[2][0],y+h,corners[2][1]],[corners[1][0],y+h,corners[1][1]],[corners[1][0],y,corners[1][1]]], baseColor, 0.75);
+    // Left face
+    drawMobFace([[corners[0][0],y,corners[0][1]],[corners[0][0],y+h,corners[0][1]],[corners[3][0],y+h,corners[3][1]],[corners[3][0],y,corners[3][1]]], baseColor, 0.65);
+
+    // Draw eyes on front face (facing direction)
     if (m.type !== 'pig') {
         var eyeY = y + h * 0.8;
-        var cam1 = camTransform(x - 0.15, eyeY, z + d + 0.01);
-        var cam2 = camTransform(x + 0.15, eyeY, z + d + 0.01);
+        var eyeDist = 0.15;
+        // Eyes positioned on front face
+        var frontCenterX = (corners[2][0] + corners[3][0]) / 2;
+        var frontCenterZ = (corners[2][1] + corners[3][1]) / 2;
+        var eyeOffX = -sf * eyeDist; // perpendicular to facing
+        var eyeOffZ = cf * eyeDist;
+        // Push eyes slightly forward
+        var fwdX = sf * (d + 0.01);
+        var fwdZ = cf * (d + 0.01);
+
+        var cam1 = camTransform(x + fwdX - eyeOffX, eyeY, z + fwdZ - eyeOffZ);
+        var cam2 = camTransform(x + fwdX + eyeOffX, eyeY, z + fwdZ + eyeOffZ);
         var p1 = project(cam1), p2 = project(cam2);
         if (p1 && p2) {
             ctx.fillStyle = m.type === 'zombie' ? '#f00' : '#000';
@@ -448,7 +513,8 @@ function drawMobFace(verts, color, shade) {
 }
 
 function drawDrop(d) {
-    var cam = camTransform(d.x, d.y + 0.2 + Math.sin(Date.now() / 200) * 0.1, d.z);
+    // Drops stay on ground, no floating animation
+    var cam = camTransform(d.x, d.y + 0.15, d.z);
     var p = project(cam);
     if (p) {
         ctx.fillStyle = ITEM_COLORS[d.item] || '#fff';
@@ -756,6 +822,12 @@ function updateMobs() {
             var dist = Math.sqrt(dx*dx + dz*dz);
             if (dist > 0.3) { m.vx += (dx / dist) * 0.004; m.vz += (dz / dist) * 0.004; }
         }
+
+        // Update facing direction based on velocity
+        if (Math.abs(m.vx) > 0.001 || Math.abs(m.vz) > 0.001) {
+            m.facing = Math.atan2(m.vx, m.vz);
+        }
+
         m.vx *= 0.85; m.vz *= 0.85;
         m.x += m.vx; m.y += m.vy; m.z += m.vz;
         var gy = getGroundY(m.x, m.z) + 1;
