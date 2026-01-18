@@ -528,8 +528,8 @@ function drawDrop(d) {
 
 // Raycast
 function raycast(maxDist) {
-    var dx = -Math.sin(player.yaw) * Math.cos(player.pitch);
-    var dy = Math.sin(player.pitch);
+    var dx = Math.sin(player.yaw) * Math.cos(player.pitch);
+    var dy = -Math.sin(player.pitch);
     var dz = Math.cos(player.yaw) * Math.cos(player.pitch);
     var prevX, prevY, prevZ;
     for (var t = 0; t < maxDist; t += 0.05) {
@@ -612,8 +612,8 @@ function attack() {
         else if (tool.item === 'akm') dmg = 20;
     }
     var range = (tool && tool.item === 'akm') ? 25 : 4;
-    var dx = -Math.sin(player.yaw) * Math.cos(player.pitch);
-    var dy = Math.sin(player.pitch);
+    var dx = Math.sin(player.yaw) * Math.cos(player.pitch);
+    var dy = -Math.sin(player.pitch);
     var dz = Math.cos(player.yaw) * Math.cos(player.pitch);
 
     for (var i = 0; i < mobs.length; i++) {
