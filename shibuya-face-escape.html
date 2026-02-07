@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>渋谷フェイスエスケープ - Shibuya Face Escape</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
+canvas { display: block; }
+
+#ui-overlay {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 10;
+}
+
+#score-panel {
+  position: absolute; top: 20px; left: 20px;
+  background: rgba(0,0,0,0.7); color: #fff; padding: 15px 25px;
+  border-radius: 12px; border: 2px solid #ff2d7b;
+  font-size: 18px; line-height: 1.8;
+  text-shadow: 0 0 10px #ff2d7b;
+}
+
+#score-panel .label { color: #aaa; font-size: 14px; }
+#score-panel .value { color: #ff2d7b; font-weight: bold; font-size: 22px; }
+
+#minimap {
+  position: absolute; bottom: 20px; right: 20px;
+  width: 180px; height: 180px;
+  background: rgba(0,0,0,0.8); border: 2px solid #ff2d7b;
+  border-radius: 50%;
+}
+
+#warning {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  color: #ff0000; font-size: 60px; font-weight: bold;
+  text-shadow: 0 0 30px #ff0000; opacity: 0;
+  transition: opacity 0.2s;
+}
+
+#start-screen {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: linear-gradient(135deg, #0a0a0a 0%, #1a0020 50%, #0a0a0a 100%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  z-index: 100; pointer-events: all;
+}
+
+#start-screen h1 {
+  font-size: 64px; color: #ff2d7b;
+  text-shadow: 0 0 40px #ff2d7b, 0 0 80px #ff2d7b;
+  margin-bottom: 10px; letter-spacing: 8px;
+}
+
+#start-screen .subtitle {
+  font-size: 28px; color: #00d4ff;
+  text-shadow: 0 0 20px #00d4ff;
+  margin-bottom: 50px; letter-spacing: 4px;
+}
+
+#start-screen .instructions {
+  color: #aaa; font-size: 16px; margin-bottom: 40px;
+  text-align: center; line-height: 2;
+}
+
+#start-screen .instructions span { color: #ff2d7b; font-weight: bold; }
+
+#start-btn {
+  padding: 18px 60px; font-size: 24px; font-weight: bold;
+  background: linear-gradient(135deg, #ff2d7b, #ff6b35);
+  color: #fff; border: none; border-radius: 50px;
+  cursor: pointer; letter-spacing: 4px;
+  box-shadow: 0 0 30px rgba(255,45,123,0.5);
+  transition: all 0.3s; pointer-events: all;
+}
+
+#start-btn:hover {
+  transform: scale(1.1);
+  box-shadow: 0 0 60px rgba(255,45,123,0.8);
+}
+
+#game-over {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0,0,0,0.9); display: none;
+  flex-direction: column; align-items: center; justify-content: center;
+  z-index: 100;
+}
+
+#game-over h1 {
+  font-size: 72px; color: #ff0000;
+  text-shadow: 0 0 40px #ff0000;
+  margin-bottom: 20px;
+}
+
+#game-over .final-score {
+  font-size: 36px; color: #fff; margin-bottom: 40px;
+}
+
+#retry-btn {
+  padding: 18px 60px; font-size: 24px; font-weight: bold;
+  background: linear-gradient(135deg, #ff2d7b, #ff6b35);
+  color: #fff; border: none; border-radius: 50px;
+  cursor: pointer; letter-spacing: 4px;
+  box-shadow: 0 0 30px rgba(255,45,123,0.5);
+  transition: all 0.3s;
+}
+
+#retry-btn:hover { transform: scale(1.1); box-shadow: 0 0 60px rgba(255,45,123,0.8); }
+
+#controls-mobile {
+  position: fixed; bottom: 20px; left: 20px;
+  z-index: 20; display: none;
+}
+
+@media (max-width: 768px) {
+  #controls-mobile { display: block; }
+}
+
+.mobile-btn {
+  width: 60px; height: 60px; border-radius: 50%;
+  background: rgba(255,45,123,0.4); border: 2px solid #ff2d7b;
+  color: #fff; font-size: 24px; position: absolute;
+  display: flex; align-items: center; justify-content: center;
+  touch-action: none; user-select: none;
+}
+
+#mb-up { left: 65px; top: 0; }
+#mb-down { left: 65px; top: 130px; }
+#mb-left { left: 0; top: 65px; }
+#mb-right { left: 130px; top: 65px; }
+</style>
+</head>
+<body>
+
+<div id="start-screen">
+  <h1>渋谷フェイスエスケープ</h1>
+  <div class="subtitle">SHIBUYA FACE ESCAPE</div>
+  <div class="instructions">
+    <span>WASD</span> または <span>矢印キー</span> で移動<br>
+    <span>マウス</span> で視点操作<br>
+    <span>SHIFT</span> でダッシュ<br>
+    巨大な顔面から逃げろ！捕まったら終わり！
+  </div>
+  <button id="start-btn" onclick="startGame()">ゲームスタート</button>
+</div>
+
+<div id="game-over">
+  <h1>捕まった！</h1>
+  <div class="final-score">スコア: <span id="final-score-val">0</span></div>
+  <button id="retry-btn" onclick="restartGame()">もう一度</button>
+</div>
+
+<div id="ui-overlay">
+  <div id="score-panel">
+    <div><span class="label">スコア</span><br><span class="value" id="score-val">0</span></div>
+    <div style="margin-top:8px"><span class="label">生存時間</span><br><span class="value" id="time-val">0s</span></div>
+    <div style="margin-top:8px"><span class="label">顔面数</span><br><span class="value" id="face-count">1</span></div>
+  </div>
+  <canvas id="minimap" width="180" height="180"></canvas>
+  <div id="warning">⚠ 近づいてる！</div>
+</div>
+
+<div id="controls-mobile">
+  <div class="mobile-btn" id="mb-up">▲</div>
+  <div class="mobile-btn" id="mb-down">▼</div>
+  <div class="mobile-btn" id="mb-left">◀</div>
+  <div class="mobile-btn" id="mb-right">▶</div>
+</div>
+
+<canvas id="game-canvas"></canvas>
+
+<script>
+// ===== CORE ENGINE =====
+const canvas = document.getElementById('game-canvas');
+const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+const minimapCanvas = document.getElementById('minimap');
+const minimapCtx = minimapCanvas.getContext('2d');
+
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+// Game state
+let gameRunning = false;
+let score = 0;
+let survivalTime = 0;
+let playerPos = { x: 0, y: 1.7, z: 0 };
+let playerRot = { x: 0, y: 0 };
+let playerSpeed = 0.12;
+let sprintSpeed = 0.22;
+let isSprinting = false;
+let faces = [];
+let buildings = [];
+let keys = {};
+let mouseDown = false;
+let lastTime = 0;
+
+// ===== SHADER PROGRAMS =====
+const vsSource = `
+  attribute vec4 aPosition;
+  attribute vec3 aNormal;
+  attribute vec2 aTexCoord;
+  attribute vec3 aColor;
+  uniform mat4 uModelView;
+  uniform mat4 uProjection;
+  uniform mat4 uModel;
+  varying vec3 vNormal;
+  varying vec3 vWorldPos;
+  varying vec2 vTexCoord;
+  varying vec3 vColor;
+  varying float vFog;
+  void main() {
+    vec4 worldPos = uModel * aPosition;
+    gl_Position = uProjection * uModelView * aPosition;
+    vNormal = mat3(uModel) * aNormal;
+    vWorldPos = worldPos.xyz;
+    vTexCoord = aTexCoord;
+    vColor = aColor;
+    float dist = length((uModelView * aPosition).xyz);
+    vFog = clamp(1.0 - dist / 120.0, 0.0, 1.0);
+  }
+`;
+
+const fsSource = `
+  precision mediump float;
+  varying vec3 vNormal;
+  varying vec3 vWorldPos;
+  varying vec2 vTexCoord;
+  varying vec3 vColor;
+  varying float vFog;
+  uniform vec3 uLightDir;
+  uniform vec3 uAmbient;
+  uniform vec3 uFogColor;
+  uniform float uEmissive;
+  void main() {
+    vec3 norm = normalize(vNormal);
+    float diff = max(dot(norm, normalize(uLightDir)), 0.0);
+    vec3 lighting = uAmbient + diff * vec3(1.0, 0.95, 0.9);
+    vec3 color = vColor * lighting + uEmissive * vColor;
+    color = mix(uFogColor, color, vFog);
+    gl_FragColor = vec4(color, 1.0);
+  }
+`;
+
+function createShader(type, source) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, source);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    console.error(gl.getShaderInfoLog(s));
+    return null;
+  }
+  return s;
+}
+
+function createProgram(vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, vs);
+  gl.attachShader(p, fs);
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(p));
+    return null;
+  }
+  return p;
+}
+
+const vs = createShader(gl.VERTEX_SHADER, vsSource);
+const fs = createShader(gl.FRAGMENT_SHADER, fsSource);
+const program = createProgram(vs, fs);
+
+const locs = {
+  aPosition: gl.getAttribLocation(program, 'aPosition'),
+  aNormal: gl.getAttribLocation(program, 'aNormal'),
+  aTexCoord: gl.getAttribLocation(program, 'aTexCoord'),
+  aColor: gl.getAttribLocation(program, 'aColor'),
+  uModelView: gl.getUniformLocation(program, 'uModelView'),
+  uProjection: gl.getUniformLocation(program, 'uProjection'),
+  uModel: gl.getUniformLocation(program, 'uModel'),
+  uLightDir: gl.getUniformLocation(program, 'uLightDir'),
+  uAmbient: gl.getUniformLocation(program, 'uAmbient'),
+  uFogColor: gl.getUniformLocation(program, 'uFogColor'),
+  uEmissive: gl.getUniformLocation(program, 'uEmissive'),
+};
+
+// ===== MATRIX MATH =====
+function mat4Identity() {
+  return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+}
+
+function mat4Perspective(fov, aspect, near, far) {
+  const f = 1.0 / Math.tan(fov / 2);
+  const nf = 1 / (near - far);
+  return new Float32Array([
+    f/aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,(2*far*near)*nf,0
+  ]);
+}
+
+function mat4Translate(m, x, y, z) {
+  const r = new Float32Array(m);
+  r[12] += r[0]*x + r[4]*y + r[8]*z;
+  r[13] += r[1]*x + r[5]*y + r[9]*z;
+  r[14] += r[2]*x + r[6]*y + r[10]*z;
+  r[15] += r[3]*x + r[7]*y + r[11]*z;
+  return r;
+}
+
+function mat4Scale(m, x, y, z) {
+  const r = new Float32Array(m);
+  r[0]*=x; r[1]*=x; r[2]*=x; r[3]*=x;
+  r[4]*=y; r[5]*=y; r[6]*=y; r[7]*=y;
+  r[8]*=z; r[9]*=z; r[10]*=z; r[11]*=z;
+  return r;
+}
+
+function mat4RotateX(m, a) {
+  const s=Math.sin(a), c=Math.cos(a), r=new Float32Array(m);
+  const a4=m[4],a5=m[5],a6=m[6],a7=m[7],a8=m[8],a9=m[9],a10=m[10],a11=m[11];
+  r[4]=a4*c+a8*s; r[5]=a5*c+a9*s; r[6]=a6*c+a10*s; r[7]=a7*c+a11*s;
+  r[8]=a8*c-a4*s; r[9]=a9*c-a5*s; r[10]=a10*c-a6*s; r[11]=a11*c-a7*s;
+  return r;
+}
+
+function mat4RotateY(m, a) {
+  const s=Math.sin(a), c=Math.cos(a), r=new Float32Array(m);
+  const a0=m[0],a1=m[1],a2=m[2],a3=m[3],a8=m[8],a9=m[9],a10=m[10],a11=m[11];
+  r[0]=a0*c-a8*s; r[1]=a1*c-a9*s; r[2]=a2*c-a10*s; r[3]=a3*c-a11*s;
+  r[8]=a0*s+a8*c; r[9]=a1*s+a9*c; r[10]=a2*s+a10*c; r[11]=a3*s+a11*c;
+  return r;
+}
+
+function mat4Multiply(a, b) {
+  const r = new Float32Array(16);
+  for (let i=0; i<4; i++)
+    for (let j=0; j<4; j++) {
+      r[j*4+i] = a[i]*b[j*4] + a[4+i]*b[j*4+1] + a[8+i]*b[j*4+2] + a[12+i]*b[j*4+3];
+    }
+  return r;
+}
+
+// ===== MESH GENERATION =====
+function createBuffer(data) {
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+  return buf;
+}
+
+function createIndexBuffer(data) {
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(data), gl.STATIC_DRAW);
+  return buf;
+}
+
+function buildBox(w, h, d, r, g, b) {
+  const hw=w/2, hh=h/2, hd=d/2;
+  const verts = [];
+  const idx = [];
+  const faces = [
+    [[hw,hh,hd],[hw,-hh,hd],[-hw,-hh,hd],[-hw,hh,hd],[0,0,1]],
+    [[-hw,hh,-hd],[-hw,-hh,-hd],[hw,-hh,-hd],[hw,hh,-hd],[0,0,-1]],
+    [[-hw,hh,hd],[-hw,-hh,hd],[-hw,-hh,-hd],[-hw,hh,-hd],[-1,0,0]],
+    [[hw,hh,-hd],[hw,-hh,-hd],[hw,-hh,hd],[hw,hh,hd],[1,0,0]],
+    [[-hw,hh,-hd],[-hw,hh,hd],[hw,hh,hd],[hw,hh,-hd],[0,1,0]],
+    [[-hw,-hh,hd],[-hw,-hh,-hd],[hw,-hh,-hd],[hw,-hh,hd],[0,-1,0]],
+  ];
+  let vi = 0;
+  for (const f of faces) {
+    for (let i=0; i<4; i++) {
+      verts.push(...f[i], ...f[4], 0, 0, r, g, b);
+    }
+    idx.push(vi,vi+1,vi+2, vi,vi+2,vi+3);
+    vi += 4;
+  }
+  return { verts, idx, vertCount: idx.length };
+}
+
+function buildSphere(radius, slices, stacks, r, g, b) {
+  const verts = [];
+  const idx = [];
+  for (let i=0; i<=stacks; i++) {
+    const phi = Math.PI * i / stacks;
+    for (let j=0; j<=slices; j++) {
+      const theta = 2 * Math.PI * j / slices;
+      const x = Math.sin(phi)*Math.cos(theta);
+      const y = Math.cos(phi);
+      const z = Math.sin(phi)*Math.sin(theta);
+      verts.push(x*radius, y*radius, z*radius, x, y, z, j/slices, i/stacks, r, g, b);
+    }
+  }
+  for (let i=0; i<stacks; i++) {
+    for (let j=0; j<slices; j++) {
+      const a = i*(slices+1)+j;
+      const b2 = a+slices+1;
+      idx.push(a, b2, a+1, b2, b2+1, a+1);
+    }
+  }
+  return { verts, idx, vertCount: idx.length };
+}
+
+function createMesh(data) {
+  return {
+    vBuf: createBuffer(data.verts),
+    iBuf: createIndexBuffer(data.idx),
+    count: data.vertCount
+  };
+}
+
+// ===== BUILDING GENERATION (渋谷の街) =====
+const CITY_SIZE = 100;
+const BLOCK_SIZE = 16;
+const ROAD_WIDTH = 6;
+
+function generateCity() {
+  buildings = [];
+
+  // Neon color palette for Shibuya
+  const neonColors = [
+    [0.15, 0.15, 0.2],   // Dark building
+    [0.12, 0.12, 0.18],
+    [0.2, 0.18, 0.22],
+    [0.1, 0.1, 0.15],
+    [0.18, 0.15, 0.2],
+  ];
+
+  const accentColors = [
+    [1.0, 0.17, 0.48],  // Neon pink
+    [0.0, 0.83, 1.0],   // Cyan
+    [1.0, 0.42, 0.21],  // Orange
+    [0.56, 0.0, 1.0],   // Purple
+    [0.0, 1.0, 0.5],    // Green
+    [1.0, 1.0, 0.0],    // Yellow
+  ];
+
+  for (let bx = -CITY_SIZE; bx < CITY_SIZE; bx += BLOCK_SIZE) {
+    for (let bz = -CITY_SIZE; bz < CITY_SIZE; bz += BLOCK_SIZE) {
+      const numBuildings = 2 + Math.floor(Math.random() * 3);
+      for (let i = 0; i < numBuildings; i++) {
+        const w = 3 + Math.random() * 6;
+        const h = 5 + Math.random() * 35;
+        const d = 3 + Math.random() * 6;
+        const ox = bx + ROAD_WIDTH/2 + Math.random() * (BLOCK_SIZE - ROAD_WIDTH - w);
+        const oz = bz + ROAD_WIDTH/2 + Math.random() * (BLOCK_SIZE - ROAD_WIDTH - d);
+
+        const col = neonColors[Math.floor(Math.random() * neonColors.length)];
+        const mesh = createMesh(buildBox(w, h, d, col[0], col[1], col[2]));
+
+        buildings.push({
+          mesh, x: ox, y: h/2, z: oz, w, h, d,
+          hasNeon: Math.random() > 0.4,
+          neonColor: accentColors[Math.floor(Math.random() * accentColors.length)],
+        });
+
+        // Neon signs on buildings
+        if (Math.random() > 0.5) {
+          const nc = accentColors[Math.floor(Math.random() * accentColors.length)];
+          const signW = w * 0.6;
+          const signH = 1.5 + Math.random() * 2;
+          const signY = h * 0.3 + Math.random() * h * 0.5;
+          const signMesh = createMesh(buildBox(signW, signH, 0.3, nc[0], nc[1], nc[2]));
+
+          buildings.push({
+            mesh: signMesh, x: ox, y: signY, z: oz + d/2 + 0.2,
+            w: signW, h: signH, d: 0.3, isSign: true, emissive: 0.8,
+          });
+        }
+      }
+    }
+  }
+
+  // 渋谷スクランブル交差点 (大きな交差点)
+  // 109ビル風の建物
+  const bigCol = [0.25, 0.2, 0.28];
+  const bigMesh = createMesh(buildBox(18, 45, 18, bigCol[0], bigCol[1], bigCol[2]));
+  buildings.push({
+    mesh: bigMesh, x: 20, y: 22.5, z: 20, w: 18, h: 45, d: 18,
+    hasNeon: true, neonColor: [1.0, 0.17, 0.48],
+  });
+
+  // Scramble crossing area - keep open
+  // Add street lights
+  for (let x = -CITY_SIZE; x < CITY_SIZE; x += BLOCK_SIZE) {
+    for (let z = -CITY_SIZE; z < CITY_SIZE; z += BLOCK_SIZE) {
+      if (Math.random() > 0.5) {
+        const poleMesh = createMesh(buildBox(0.15, 6, 0.15, 0.3, 0.3, 0.3));
+        buildings.push({
+          mesh: poleMesh, x: x + 1, y: 3, z: z + 1,
+          w: 0.15, h: 6, d: 0.15,
+        });
+        const lightMesh = createMesh(buildBox(0.5, 0.5, 0.5, 1.0, 0.95, 0.8));
+        buildings.push({
+          mesh: lightMesh, x: x + 1, y: 6.2, z: z + 1,
+          w: 0.5, h: 0.5, d: 0.5, isSign: true, emissive: 1.0,
+        });
+      }
+    }
+  }
+}
+
+// ===== GROUND =====
+function buildGround() {
+  const s = CITY_SIZE * 2;
+  const verts = [];
+  const idx = [];
+  // Road surface
+  verts.push(-s, 0, -s, 0,1,0, 0,0, 0.08,0.08,0.1);
+  verts.push( s, 0, -s, 0,1,0, 1,0, 0.08,0.08,0.1);
+  verts.push( s, 0,  s, 0,1,0, 1,1, 0.08,0.08,0.1);
+  verts.push(-s, 0,  s, 0,1,0, 0,1, 0.08,0.08,0.1);
+  idx.push(0,1,2, 0,2,3);
+
+  // Crosswalk lines (渋谷スクランブル交差点)
+  let vi = 4;
+  for (let i = -5; i <= 5; i++) {
+    const cx = i * 1.2;
+    verts.push(cx-0.4, 0.01, -6, 0,1,0, 0,0, 0.9,0.9,0.9);
+    verts.push(cx+0.4, 0.01, -6, 0,1,0, 0,0, 0.9,0.9,0.9);
+    verts.push(cx+0.4, 0.01,  6, 0,1,0, 0,0, 0.9,0.9,0.9);
+    verts.push(cx-0.4, 0.01,  6, 0,1,0, 0,0, 0.9,0.9,0.9);
+    idx.push(vi,vi+1,vi+2, vi,vi+2,vi+3);
+    vi += 4;
+  }
+  // Cross stripes (diagonal)
+  for (let i = -5; i <= 5; i++) {
+    const cz = i * 1.2;
+    verts.push(-6, 0.01, cz-0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
+    verts.push( 6, 0.01, cz-0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
+    verts.push( 6, 0.01, cz+0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
+    verts.push(-6, 0.01, cz+0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
+    idx.push(vi,vi+1,vi+2, vi,vi+2,vi+3);
+    vi += 4;
+  }
+
+  return createMesh({ verts, idx, vertCount: idx.length });
+}
+
+// ===== FACE (顔面) GENERATION =====
+function buildFace() {
+  const verts = [];
+  const idx = [];
+  let vi = 0;
+
+  function addSphere(cx, cy, cz, rad, sl, st, r, g, b) {
+    const startVi = vi;
+    for (let i=0; i<=st; i++) {
+      const phi = Math.PI * i / st;
+      for (let j=0; j<=sl; j++) {
+        const theta = 2 * Math.PI * j / sl;
+        const x = Math.sin(phi)*Math.cos(theta);
+        const y = Math.cos(phi);
+        const z = Math.sin(phi)*Math.sin(theta);
+        verts.push(cx+x*rad, cy+y*rad, cz+z*rad, x, y, z, j/sl, i/st, r, g, b);
+        vi++;
+      }
+    }
+    for (let i=0; i<st; i++) {
+      for (let j=0; j<sl; j++) {
+        const a = startVi + i*(sl+1)+j;
+        const b2 = a+sl+1;
+        idx.push(a, b2, a+1, b2, b2+1, a+1);
+      }
+    }
+  }
+
+  // Head (skin color)
+  addSphere(0, 0, 0, 2.5, 16, 12, 0.95, 0.78, 0.65);
+
+  // Left eye (white)
+  addSphere(-0.7, 0.4, 2.0, 0.55, 10, 8, 1.0, 1.0, 1.0);
+  // Right eye (white)
+  addSphere(0.7, 0.4, 2.0, 0.55, 10, 8, 1.0, 1.0, 1.0);
+  // Left pupil
+  addSphere(-0.7, 0.4, 2.45, 0.28, 8, 6, 0.1, 0.1, 0.1);
+  // Right pupil
+  addSphere(0.7, 0.4, 2.45, 0.28, 8, 6, 0.1, 0.1, 0.1);
+  // Left iris
+  addSphere(-0.7, 0.4, 2.35, 0.35, 8, 6, 0.6, 0.1, 0.1);
+  // Right iris
+  addSphere(0.7, 0.4, 2.35, 0.35, 8, 6, 0.6, 0.1, 0.1);
+
+  // Nose
+  addSphere(0, -0.1, 2.2, 0.35, 8, 6, 0.9, 0.7, 0.58);
+
+  // Mouth (big creepy smile)
+  for (let i = 0; i < 12; i++) {
+    const angle = (i / 11) * Math.PI;
+    const mx = Math.cos(angle) * 1.2 - 0.0;
+    const my = -0.9 - Math.sin(angle) * 0.5;
+    addSphere(mx, my, 2.1, 0.15, 6, 4, 0.3, 0.0, 0.0);
+  }
+  // Teeth
+  for (let i = 1; i < 11; i += 2) {
+    const angle = (i / 11) * Math.PI;
+    const mx = Math.cos(angle) * 1.0;
+    const my = -0.85 - Math.sin(angle) * 0.1;
+    addSphere(mx, my, 2.2, 0.13, 6, 4, 1.0, 1.0, 0.95);
+  }
+
+  // Eyebrows (angry/creepy)
+  for (let i = 0; i < 5; i++) {
+    addSphere(-0.7 + (i-2)*0.2, 0.9 + Math.abs(i-2)*0.08, 2.1, 0.1, 6, 4, 0.2, 0.1, 0.05);
+    addSphere(0.7 + (i-2)*0.2, 0.9 + Math.abs(i-2)*0.08, 2.1, 0.1, 6, 4, 0.2, 0.1, 0.05);
+  }
+
+  return createMesh({ verts, idx, vertCount: idx.length });
+}
+
+const faceMesh = buildFace();
+let groundMesh;
+
+// ===== FACE ENTITY =====
+function spawnFace() {
+  const angle = Math.random() * Math.PI * 2;
+  const dist = 40 + Math.random() * 30;
+  return {
+    x: playerPos.x + Math.cos(angle) * dist,
+    y: 2.5 + Math.random() * 3,
+    z: playerPos.z + Math.sin(angle) * dist,
+    speed: 0.03 + Math.random() * 0.02 + score * 0.0001,
+    scale: 1.5 + Math.random() * 1.5,
+    wobble: Math.random() * Math.PI * 2,
+    wobbleSpeed: 1 + Math.random() * 2,
+  };
+}
+
+// ===== COLLISION =====
+function checkBuildingCollision(nx, nz) {
+  for (const b of buildings) {
+    if (b.isSign) continue;
+    const hw = b.w/2 + 0.5;
+    const hd = b.d/2 + 0.5;
+    if (nx > b.x - hw && nx < b.x + hw && nz > b.z - hd && nz < b.z + hd) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ===== RENDERING =====
+function drawMesh(mesh, modelMatrix, emissive) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, mesh.vBuf);
+  const stride = 44; // 11 floats * 4 bytes
+  gl.vertexAttribPointer(locs.aPosition, 3, gl.FLOAT, false, stride, 0);
+  gl.vertexAttribPointer(locs.aNormal, 3, gl.FLOAT, false, stride, 12);
+  gl.vertexAttribPointer(locs.aTexCoord, 2, gl.FLOAT, false, stride, 24);
+  gl.vertexAttribPointer(locs.aColor, 3, gl.FLOAT, false, stride, 32);
+  gl.enableVertexAttribArray(locs.aPosition);
+  gl.enableVertexAttribArray(locs.aNormal);
+  gl.enableVertexAttribArray(locs.aTexCoord);
+  gl.enableVertexAttribArray(locs.aColor);
+
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.iBuf);
+
+  let viewMatrix = mat4Identity();
+  viewMatrix = mat4RotateX(viewMatrix, -playerRot.x);
+  viewMatrix = mat4RotateY(viewMatrix, -playerRot.y);
+  viewMatrix = mat4Translate(viewMatrix, -playerPos.x, -playerPos.y, -playerPos.z);
+
+  const mvMatrix = mat4Multiply(viewMatrix, modelMatrix);
+  gl.uniformMatrix4fv(locs.uModelView, false, mvMatrix);
+  gl.uniformMatrix4fv(locs.uModel, false, modelMatrix);
+  gl.uniform1f(locs.uEmissive, emissive || 0);
+
+  gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
+}
+
+// ===== MINIMAP =====
+function drawMinimap() {
+  const ctx = minimapCtx;
+  const w = 180, h = 180;
+  ctx.clearRect(0, 0, w, h);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(w/2, h/2, w/2-2, 0, Math.PI*2);
+  ctx.clip();
+
+  ctx.fillStyle = 'rgba(10,10,20,0.9)';
+  ctx.fillRect(0, 0, w, h);
+
+  const scale = 1.5;
+  const cx = w/2, cy = h/2;
+
+  // Buildings on minimap
+  ctx.fillStyle = 'rgba(60,50,80,0.7)';
+  for (const b of buildings) {
+    if (b.isSign) continue;
+    const dx = (b.x - playerPos.x) * scale;
+    const dz = (b.z - playerPos.z) * scale;
+    if (Math.abs(dx) > 90 || Math.abs(dz) > 90) continue;
+    ctx.fillRect(cx + dx - b.w*scale/2, cy + dz - b.d*scale/2, b.w*scale, b.d*scale);
+  }
+
+  // Faces on minimap
+  for (const f of faces) {
+    const dx = (f.x - playerPos.x) * scale;
+    const dz = (f.z - playerPos.z) * scale;
+    if (Math.abs(dx) > 90 || Math.abs(dz) > 90) continue;
+    ctx.beginPath();
+    ctx.arc(cx + dx, cy + dz, 4, 0, Math.PI*2);
+    ctx.fillStyle = '#ff0044';
+    ctx.fill();
+    ctx.strokeStyle = '#ff0044';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // Player
+  ctx.beginPath();
+  ctx.arc(cx, cy, 3, 0, Math.PI*2);
+  ctx.fillStyle = '#00ff88';
+  ctx.fill();
+
+  // Player direction
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + Math.sin(playerRot.y)*12, cy - Math.cos(playerRot.y)*12);
+  ctx.strokeStyle = '#00ff88';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.restore();
+
+  // Border
+  ctx.beginPath();
+  ctx.arc(w/2, h/2, w/2-2, 0, Math.PI*2);
+  ctx.strokeStyle = '#ff2d7b';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+// ===== GAME LOOP =====
+function update(dt) {
+  if (!gameRunning) return;
+
+  survivalTime += dt;
+  score = Math.floor(survivalTime * 10);
+
+  // Player movement
+  const speed = isSprinting ? sprintSpeed : playerSpeed;
+  let moveX = 0, moveZ = 0;
+  if (keys['w'] || keys['arrowup']) { moveX -= Math.sin(playerRot.y); moveZ -= Math.cos(playerRot.y); }
+  if (keys['s'] || keys['arrowdown']) { moveX += Math.sin(playerRot.y); moveZ += Math.cos(playerRot.y); }
+  if (keys['a'] || keys['arrowleft']) { moveX -= Math.cos(playerRot.y); moveZ += Math.sin(playerRot.y); }
+  if (keys['d'] || keys['arrowright']) { moveX += Math.cos(playerRot.y); moveZ -= Math.sin(playerRot.y); }
+
+  if (moveX !== 0 || moveZ !== 0) {
+    const len = Math.sqrt(moveX*moveX + moveZ*moveZ);
+    moveX = moveX/len * speed;
+    moveZ = moveZ/len * speed;
+
+    const nx = playerPos.x + moveX;
+    const nz = playerPos.z + moveZ;
+    if (!checkBuildingCollision(nx, playerPos.z)) playerPos.x = nx;
+    if (!checkBuildingCollision(playerPos.x, nz)) playerPos.z = nz;
+  }
+
+  // Head bobbing
+  if (moveX !== 0 || moveZ !== 0) {
+    playerPos.y = 1.7 + Math.sin(survivalTime * 10) * 0.05;
+  }
+
+  // Spawn more faces over time
+  const targetFaces = Math.min(1 + Math.floor(survivalTime / 15), 8);
+  while (faces.length < targetFaces) {
+    faces.push(spawnFace());
+  }
+
+  // Update faces
+  let closestDist = Infinity;
+  for (const f of faces) {
+    // Chase player
+    const dx = playerPos.x - f.x;
+    const dz = playerPos.z - f.z;
+    const dist = Math.sqrt(dx*dx + dz*dz);
+
+    if (dist > 0.1) {
+      const dirX = dx / dist;
+      const dirZ = dz / dist;
+
+      // Speed increases when closer
+      const speedMult = 1 + Math.max(0, (30 - dist)) * 0.03;
+      const nx = f.x + dirX * f.speed * speedMult;
+      const nz = f.z + dirZ * f.speed * speedMult;
+
+      if (!checkBuildingCollision(nx, nz)) {
+        f.x = nx;
+        f.z = nz;
+      } else {
+        // Try to go around
+        f.x += dirZ * f.speed * 0.5;
+        f.z -= dirX * f.speed * 0.5;
+      }
+    }
+
+    f.wobble += f.wobbleSpeed * dt;
+    f.y = 2.5 + Math.sin(f.wobble) * 0.5;
+
+    if (dist < closestDist) closestDist = dist;
+
+    // Catch check
+    if (dist < 2.5) {
+      gameOver();
+      return;
+    }
+  }
+
+  // Warning indicator
+  const warning = document.getElementById('warning');
+  if (closestDist < 15) {
+    warning.style.opacity = Math.max(0, 1 - closestDist / 15);
+    warning.textContent = closestDist < 8 ? '⚠ 危険！！！' : '⚠ 近づいてる！';
+  } else {
+    warning.style.opacity = 0;
+  }
+
+  // Update UI
+  document.getElementById('score-val').textContent = score;
+  document.getElementById('time-val').textContent = Math.floor(survivalTime) + 's';
+  document.getElementById('face-count').textContent = faces.length;
+}
+
+function render() {
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0.02, 0.01, 0.05, 1.0);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);
+  gl.enable(gl.CULL_FACE);
+
+  gl.useProgram(program);
+
+  const proj = mat4Perspective(Math.PI / 3, canvas.width / canvas.height, 0.1, 200);
+  gl.uniformMatrix4fv(locs.uProjection, false, proj);
+  gl.uniform3f(locs.uLightDir, 0.3, 1.0, 0.5);
+  gl.uniform3f(locs.uAmbient, 0.15, 0.12, 0.2);
+  gl.uniform3f(locs.uFogColor, 0.02, 0.01, 0.05);
+
+  // Ground
+  drawMesh(groundMesh, mat4Identity(), 0);
+
+  // Buildings
+  for (const b of buildings) {
+    const model = mat4Translate(mat4Identity(), b.x, b.y, b.z);
+    drawMesh(b.mesh, model, b.emissive || 0);
+  }
+
+  // Faces
+  for (const f of faces) {
+    let model = mat4Translate(mat4Identity(), f.x, f.y, f.z);
+    model = mat4Scale(model, f.scale, f.scale, f.scale);
+    // Face always looks at player
+    const angle = Math.atan2(playerPos.x - f.x, playerPos.z - f.z);
+    model = mat4RotateY(model, angle);
+    // Creepy wobble
+    model = mat4RotateX(model, Math.sin(f.wobble * 2) * 0.1);
+    drawMesh(faceMesh, model, 0.15);
+  }
+
+  // Minimap
+  drawMinimap();
+}
+
+function gameLoop(time) {
+  const dt = Math.min((time - lastTime) / 1000, 0.05);
+  lastTime = time;
+
+  if (gameRunning) {
+    update(dt);
+    render();
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+// ===== GAME STATE =====
+function startGame() {
+  document.getElementById('start-screen').style.display = 'none';
+  canvas.requestPointerLock();
+
+  playerPos = { x: 0, y: 1.7, z: 0 };
+  playerRot = { x: 0, y: 0 };
+  score = 0;
+  survivalTime = 0;
+  faces = [spawnFace()];
+
+  generateCity();
+  groundMesh = buildGround();
+
+  gameRunning = true;
+  lastTime = performance.now();
+}
+
+function gameOver() {
+  gameRunning = false;
+  document.exitPointerLock();
+  document.getElementById('final-score-val').textContent = score;
+  document.getElementById('game-over').style.display = 'flex';
+}
+
+function restartGame() {
+  document.getElementById('game-over').style.display = 'none';
+  startGame();
+}
+
+// ===== INPUT =====
+document.addEventListener('keydown', (e) => {
+  keys[e.key.toLowerCase()] = true;
+  if (e.key === 'Shift') isSprinting = true;
+});
+
+document.addEventListener('keyup', (e) => {
+  keys[e.key.toLowerCase()] = false;
+  if (e.key === 'Shift') isSprinting = false;
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (document.pointerLockElement === canvas) {
+    playerRot.y += e.movementX * 0.003;
+    playerRot.x += e.movementY * 0.003;
+    playerRot.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, playerRot.x));
+  }
+});
+
+canvas.addEventListener('click', () => {
+  if (gameRunning && document.pointerLockElement !== canvas) {
+    canvas.requestPointerLock();
+  }
+});
+
+// Mobile controls
+['mb-up','mb-down','mb-left','mb-right'].forEach(id => {
+  const el = document.getElementById(id);
+  const key = {
+    'mb-up': 'w', 'mb-down': 's', 'mb-left': 'a', 'mb-right': 'd'
+  }[id];
+  el.addEventListener('touchstart', (e) => { e.preventDefault(); keys[key] = true; });
+  el.addEventListener('touchend', (e) => { e.preventDefault(); keys[key] = false; });
+});
+
+// Touch look
+let lastTouchX = 0, lastTouchY = 0;
+canvas.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 1) {
+    lastTouchX = e.touches[0].clientX;
+    lastTouchY = e.touches[0].clientY;
+  }
+});
+canvas.addEventListener('touchmove', (e) => {
+  if (e.touches.length === 1) {
+    const dx = e.touches[0].clientX - lastTouchX;
+    const dy = e.touches[0].clientY - lastTouchY;
+    playerRot.y += dx * 0.005;
+    playerRot.x += dy * 0.005;
+    playerRot.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, playerRot.x));
+    lastTouchX = e.touches[0].clientX;
+    lastTouchY = e.touches[0].clientY;
+  }
+});
+
+// Resize
+window.addEventListener('resize', () => {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+});
+
+// Start loop (renders even before game starts)
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
