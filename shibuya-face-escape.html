@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>渋谷フェイスエスケープ - Shibuya Face Escape</title>
+<title>Shibuya Face Escape</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
@@ -133,31 +133,31 @@ canvas { display: block; }
 <body>
 
 <div id="start-screen">
-  <h1>渋谷フェイスエスケープ</h1>
-  <div class="subtitle">SHIBUYA FACE ESCAPE</div>
+  <h1>SHIBUYA</h1>
+  <div class="subtitle">FACE ESCAPE</div>
   <div class="instructions">
-    <span>WASD</span> または <span>矢印キー</span> で移動<br>
-    <span>マウス</span> で視点操作<br>
-    <span>SHIFT</span> でダッシュ<br>
-    巨大な顔面から逃げろ！捕まったら終わり！
+    <span>WASD</span> / <span>Arrow Keys</span> : Move<br>
+    <span>Mouse</span> : Look around<br>
+    <span>SHIFT</span> : Sprint<br>
+    Run from the giant faces! Don't get caught!
   </div>
-  <button id="start-btn" onclick="startGame()">ゲームスタート</button>
+  <button id="start-btn" onclick="startGame()">START GAME</button>
 </div>
 
 <div id="game-over">
-  <h1>捕まった！</h1>
-  <div class="final-score">スコア: <span id="final-score-val">0</span></div>
-  <button id="retry-btn" onclick="restartGame()">もう一度</button>
+  <h1>CAUGHT!</h1>
+  <div class="final-score">Score: <span id="final-score-val">0</span></div>
+  <button id="retry-btn" onclick="restartGame()">RETRY</button>
 </div>
 
 <div id="ui-overlay">
   <div id="score-panel">
-    <div><span class="label">スコア</span><br><span class="value" id="score-val">0</span></div>
-    <div style="margin-top:8px"><span class="label">生存時間</span><br><span class="value" id="time-val">0s</span></div>
-    <div style="margin-top:8px"><span class="label">顔面数</span><br><span class="value" id="face-count">1</span></div>
+    <div><span class="label">SCORE</span><br><span class="value" id="score-val">0</span></div>
+    <div style="margin-top:8px"><span class="label">TIME</span><br><span class="value" id="time-val">0s</span></div>
+    <div style="margin-top:8px"><span class="label">FACES</span><br><span class="value" id="face-count">1</span></div>
   </div>
   <canvas id="minimap" width="180" height="180"></canvas>
-  <div id="warning">⚠ 近づいてる！</div>
+  <div id="warning">WARNING!</div>
 </div>
 
 <div id="controls-mobile">
@@ -432,8 +432,11 @@ function generateCity() {
     [1.0, 1.0, 0.0],    // Yellow
   ];
 
+  const SAFE_ZONE = 18; // clear area around spawn
   for (let bx = -CITY_SIZE; bx < CITY_SIZE; bx += BLOCK_SIZE) {
     for (let bz = -CITY_SIZE; bz < CITY_SIZE; bz += BLOCK_SIZE) {
+      // Skip blocks near spawn point
+      if (Math.abs(bx + BLOCK_SIZE/2) < SAFE_ZONE && Math.abs(bz + BLOCK_SIZE/2) < SAFE_ZONE) continue;
       const numBuildings = 2 + Math.floor(Math.random() * 3);
       for (let i = 0; i < numBuildings; i++) {
         const w = 3 + Math.random() * 6;
@@ -481,6 +484,7 @@ function generateCity() {
   // Add street lights
   for (let x = -CITY_SIZE; x < CITY_SIZE; x += BLOCK_SIZE) {
     for (let z = -CITY_SIZE; z < CITY_SIZE; z += BLOCK_SIZE) {
+      if (Math.abs(x) < SAFE_ZONE && Math.abs(z) < SAFE_ZONE) continue;
       if (Math.random() > 0.5) {
         const poleMesh = createMesh(buildBox(0.15, 6, 0.15, 0.3, 0.3, 0.3));
         buildings.push({
@@ -809,7 +813,7 @@ function update(dt) {
   const warning = document.getElementById('warning');
   if (closestDist < 15) {
     warning.style.opacity = Math.max(0, 1 - closestDist / 15);
-    warning.textContent = closestDist < 8 ? '⚠ 危険！！！' : '⚠ 近づいてる！';
+    warning.textContent = closestDist < 8 ? 'DANGER!!!' : 'WARNING!';
   } else {
     warning.style.opacity = 0;
   }
