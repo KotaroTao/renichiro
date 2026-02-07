@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Shibuya Face Escape</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
+body { overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; cursor: crosshair; }
 canvas { display: block; }
 
 #ui-overlay {
@@ -161,10 +161,10 @@ canvas { display: block; }
 </div>
 
 <div id="controls-mobile">
-  <div class="mobile-btn" id="mb-up">▲</div>
-  <div class="mobile-btn" id="mb-down">▼</div>
-  <div class="mobile-btn" id="mb-left">◀</div>
-  <div class="mobile-btn" id="mb-right">▶</div>
+  <div class="mobile-btn" id="mb-up">&#9650;</div>
+  <div class="mobile-btn" id="mb-down">&#9660;</div>
+  <div class="mobile-btn" id="mb-left">&#9664;</div>
+  <div class="mobile-btn" id="mb-right">&#9654;</div>
 </div>
 
 <canvas id="game-canvas"></canvas>
@@ -179,7 +179,6 @@ const minimapCtx = minimapCanvas.getContext('2d');
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 
-// Game state
 let gameRunning = false;
 let score = 0;
 let survivalTime = 0;
@@ -191,10 +190,9 @@ let isSprinting = false;
 let faces = [];
 let buildings = [];
 let keys = {};
-let mouseDown = false;
 let lastTime = 0;
 
-// ===== SHADER PROGRAMS =====
+// ===== BUILDING SHADER =====
 const vsSource = `
   attribute vec4 aPosition;
   attribute vec3 aNormal;
@@ -241,6 +239,32 @@ const fsSource = `
   }
 `;
 
+// ===== BILLBOARD SHADER (for 2D face) =====
+const bbVS = `
+  attribute vec3 aBBPos;
+  attribute vec2 aBBUV;
+  uniform mat4 uBBMVP;
+  varying vec2 vUV;
+  void main() {
+    gl_Position = uBBMVP * vec4(aBBPos, 1.0);
+    vUV = aBBUV;
+  }
+`;
+
+const bbFS = `
+  precision mediump float;
+  varying vec2 vUV;
+  uniform sampler2D uBBTex;
+  uniform float uBBFog;
+  uniform vec3 uBBFogCol;
+  void main() {
+    vec4 c = texture2D(uBBTex, vUV);
+    if (c.a < 0.1) discard;
+    c.rgb = mix(uBBFogCol, c.rgb, uBBFog);
+    gl_FragColor = c;
+  }
+`;
+
 function createShader(type, source) {
   const s = gl.createShader(type);
   gl.shaderSource(s, source);
@@ -252,10 +276,12 @@ function createShader(type, source) {
   return s;
 }
 
-function createProgram(vs, fs) {
+function createProgram(vsSrc, fsSrc) {
+  const v = createShader(gl.VERTEX_SHADER, vsSrc);
+  const f = createShader(gl.FRAGMENT_SHADER, fsSrc);
   const p = gl.createProgram();
-  gl.attachShader(p, vs);
-  gl.attachShader(p, fs);
+  gl.attachShader(p, v);
+  gl.attachShader(p, f);
   gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
     console.error(gl.getProgramInfoLog(p));
@@ -264,10 +290,8 @@ function createProgram(vs, fs) {
   return p;
 }
 
-const vs = createShader(gl.VERTEX_SHADER, vsSource);
-const fs = createShader(gl.FRAGMENT_SHADER, fsSource);
-const program = createProgram(vs, fs);
-
+// Building shader
+const program = createProgram(vsSource, fsSource);
 const locs = {
   aPosition: gl.getAttribLocation(program, 'aPosition'),
   aNormal: gl.getAttribLocation(program, 'aNormal'),
@@ -280,6 +304,17 @@ const locs = {
   uAmbient: gl.getUniformLocation(program, 'uAmbient'),
   uFogColor: gl.getUniformLocation(program, 'uFogColor'),
   uEmissive: gl.getUniformLocation(program, 'uEmissive'),
+};
+
+// Billboard shader
+const bbProgram = createProgram(bbVS, bbFS);
+const bbLocs = {
+  aBBPos: gl.getAttribLocation(bbProgram, 'aBBPos'),
+  aBBUV: gl.getAttribLocation(bbProgram, 'aBBUV'),
+  uBBMVP: gl.getUniformLocation(bbProgram, 'uBBMVP'),
+  uBBTex: gl.getUniformLocation(bbProgram, 'uBBTex'),
+  uBBFog: gl.getUniformLocation(bbProgram, 'uBBFog'),
+  uBBFogCol: gl.getUniformLocation(bbProgram, 'uBBFogCol'),
 };
 
 // ===== MATRIX MATH =====
@@ -337,7 +372,7 @@ function mat4Multiply(a, b) {
   return r;
 }
 
-// ===== MESH GENERATION =====
+// ===== MESH HELPERS =====
 function createBuffer(data) {
   const buf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -356,7 +391,7 @@ function buildBox(w, h, d, r, g, b) {
   const hw=w/2, hh=h/2, hd=d/2;
   const verts = [];
   const idx = [];
-  const faces = [
+  const boxFaces = [
     [[hw,hh,hd],[hw,-hh,hd],[-hw,-hh,hd],[-hw,hh,hd],[0,0,1]],
     [[-hw,hh,-hd],[-hw,-hh,-hd],[hw,-hh,-hd],[hw,hh,-hd],[0,0,-1]],
     [[-hw,hh,hd],[-hw,-hh,hd],[-hw,-hh,-hd],[-hw,hh,-hd],[-1,0,0]],
@@ -365,35 +400,12 @@ function buildBox(w, h, d, r, g, b) {
     [[-hw,-hh,hd],[-hw,-hh,-hd],[hw,-hh,-hd],[hw,-hh,hd],[0,-1,0]],
   ];
   let vi = 0;
-  for (const f of faces) {
+  for (const f of boxFaces) {
     for (let i=0; i<4; i++) {
       verts.push(...f[i], ...f[4], 0, 0, r, g, b);
     }
     idx.push(vi,vi+1,vi+2, vi,vi+2,vi+3);
     vi += 4;
-  }
-  return { verts, idx, vertCount: idx.length };
-}
-
-function buildSphere(radius, slices, stacks, r, g, b) {
-  const verts = [];
-  const idx = [];
-  for (let i=0; i<=stacks; i++) {
-    const phi = Math.PI * i / stacks;
-    for (let j=0; j<=slices; j++) {
-      const theta = 2 * Math.PI * j / slices;
-      const x = Math.sin(phi)*Math.cos(theta);
-      const y = Math.cos(phi);
-      const z = Math.sin(phi)*Math.sin(theta);
-      verts.push(x*radius, y*radius, z*radius, x, y, z, j/slices, i/stacks, r, g, b);
-    }
-  }
-  for (let i=0; i<stacks; i++) {
-    for (let j=0; j<slices; j++) {
-      const a = i*(slices+1)+j;
-      const b2 = a+slices+1;
-      idx.push(a, b2, a+1, b2, b2+1, a+1);
-    }
   }
   return { verts, idx, vertCount: idx.length };
 }
@@ -406,7 +418,182 @@ function createMesh(data) {
   };
 }
 
-// ===== BUILDING GENERATION (渋谷の街) =====
+// ===== 2D FACE TEXTURE =====
+function createFaceTexture() {
+  const sz = 256, c = document.createElement('canvas');
+  c.width = sz; c.height = sz;
+  const g = c.getContext('2d');
+  const cx = sz/2, cy = sz/2;
+
+  g.clearRect(0, 0, sz, sz);
+
+  // Head
+  g.beginPath();
+  g.arc(cx, cy, 115, 0, Math.PI*2);
+  g.fillStyle = '#f0c090';
+  g.fill();
+  g.strokeStyle = '#b08060';
+  g.lineWidth = 3;
+  g.stroke();
+
+  // Cheek shadows
+  g.beginPath();
+  g.arc(cx - 55, cy + 25, 30, 0, Math.PI*2);
+  g.fillStyle = 'rgba(200,100,100,0.15)';
+  g.fill();
+  g.beginPath();
+  g.arc(cx + 55, cy + 25, 30, 0, Math.PI*2);
+  g.fill();
+
+  // Eye sockets (dark circles)
+  g.beginPath();
+  g.ellipse(cx - 38, cy - 10, 32, 36, 0, 0, Math.PI*2);
+  g.fillStyle = 'rgba(80,40,60,0.2)';
+  g.fill();
+  g.beginPath();
+  g.ellipse(cx + 38, cy - 10, 32, 36, 0, 0, Math.PI*2);
+  g.fill();
+
+  // Eyes (white)
+  g.beginPath();
+  g.ellipse(cx - 38, cy - 12, 26, 30, 0, 0, Math.PI*2);
+  g.fillStyle = '#fff';
+  g.fill();
+  g.strokeStyle = '#444';
+  g.lineWidth = 2;
+  g.stroke();
+  g.beginPath();
+  g.ellipse(cx + 38, cy - 12, 26, 30, 0, 0, Math.PI*2);
+  g.fillStyle = '#fff';
+  g.fill();
+  g.stroke();
+
+  // Bloodshot veins
+  g.strokeStyle = 'rgba(200,0,0,0.3)';
+  g.lineWidth = 1;
+  [[-55,-20,-38,-12], [-20,-25,-38,-12], [-55,-5,-38,-5],
+   [55,-20,38,-12], [20,-25,38,-12], [55,-5,38,-5]].forEach(v => {
+    g.beginPath();
+    g.moveTo(cx+v[0], cy+v[1]);
+    g.lineTo(cx+v[2], cy+v[3]);
+    g.stroke();
+  });
+
+  // Irises (red)
+  g.beginPath();
+  g.arc(cx - 38, cy - 8, 14, 0, Math.PI*2);
+  g.fillStyle = '#cc1100';
+  g.fill();
+  g.beginPath();
+  g.arc(cx + 38, cy - 8, 14, 0, Math.PI*2);
+  g.fillStyle = '#cc1100';
+  g.fill();
+
+  // Pupils (tiny, cross-eyed)
+  g.beginPath();
+  g.arc(cx - 34, cy - 8, 6, 0, Math.PI*2);
+  g.fillStyle = '#000';
+  g.fill();
+  g.beginPath();
+  g.arc(cx + 34, cy - 8, 6, 0, Math.PI*2);
+  g.fillStyle = '#000';
+  g.fill();
+
+  // Eye highlights
+  g.beginPath();
+  g.arc(cx - 42, cy - 16, 4, 0, Math.PI*2);
+  g.fillStyle = 'rgba(255,255,255,0.8)';
+  g.fill();
+  g.beginPath();
+  g.arc(cx + 34, cy - 16, 4, 0, Math.PI*2);
+  g.fill();
+
+  // Angry eyebrows
+  g.lineWidth = 7;
+  g.lineCap = 'round';
+  g.strokeStyle = '#3a1a0a';
+  g.beginPath();
+  g.moveTo(cx - 65, cy - 32);
+  g.lineTo(cx - 15, cy - 48);
+  g.stroke();
+  g.beginPath();
+  g.moveTo(cx + 65, cy - 32);
+  g.lineTo(cx + 15, cy - 48);
+  g.stroke();
+
+  // Nose
+  g.beginPath();
+  g.moveTo(cx, cy - 2);
+  g.lineTo(cx - 10, cy + 22);
+  g.quadraticCurveTo(cx, cy + 28, cx + 10, cy + 22);
+  g.closePath();
+  g.fillStyle = '#d8a878';
+  g.fill();
+
+  // Mouth (wide grin)
+  g.beginPath();
+  g.arc(cx, cy + 48, 55, 0.15, Math.PI - 0.15);
+  g.fillStyle = '#300000';
+  g.fill();
+  g.strokeStyle = '#200000';
+  g.lineWidth = 3;
+  g.stroke();
+
+  // Teeth top row
+  for (let i = 0; i < 9; i++) {
+    const angle = 0.15 + (Math.PI - 0.3) * i / 8;
+    const tx = cx + Math.cos(angle) * 50;
+    const ty = cy + 48 + Math.sin(angle) * 50 - 14;
+    g.fillStyle = '#ffe';
+    g.fillRect(tx - 5, ty - 2, 10, 14);
+    g.strokeStyle = '#cca';
+    g.lineWidth = 0.5;
+    g.strokeRect(tx - 5, ty - 2, 10, 14);
+  }
+
+  // Gum line
+  g.beginPath();
+  g.arc(cx, cy + 48, 52, 0.2, Math.PI - 0.2);
+  g.strokeStyle = '#cc4444';
+  g.lineWidth = 3;
+  g.stroke();
+
+  // Wrinkle lines around mouth
+  g.strokeStyle = 'rgba(160,100,70,0.3)';
+  g.lineWidth = 1.5;
+  g.beginPath();
+  g.arc(cx, cy + 45, 65, 0.3, Math.PI - 0.3);
+  g.stroke();
+
+  // Create WebGL texture
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return tex;
+}
+
+const faceTexture = createFaceTexture();
+
+// Billboard quad: pos(x,y,z) + uv(u,v) = 5 floats per vert
+const quadVerts = new Float32Array([
+  -1,  1, 0,  0, 0,
+   1,  1, 0,  1, 0,
+   1, -1, 0,  1, 1,
+  -1, -1, 0,  0, 1,
+]);
+const quadIdx = new Uint16Array([0,1,2, 0,2,3]);
+const quadVBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quadVBuf);
+gl.bufferData(gl.ARRAY_BUFFER, quadVerts, gl.STATIC_DRAW);
+const quadIBuf = gl.createBuffer();
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, quadIBuf);
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, quadIdx, gl.STATIC_DRAW);
+
+// ===== CITY GENERATION =====
 const CITY_SIZE = 100;
 const BLOCK_SIZE = 16;
 const ROAD_WIDTH = 6;
@@ -414,9 +601,8 @@ const ROAD_WIDTH = 6;
 function generateCity() {
   buildings = [];
 
-  // Neon color palette for Shibuya
   const neonColors = [
-    [0.15, 0.15, 0.2],   // Dark building
+    [0.15, 0.15, 0.2],
     [0.12, 0.12, 0.18],
     [0.2, 0.18, 0.22],
     [0.1, 0.1, 0.15],
@@ -424,18 +610,17 @@ function generateCity() {
   ];
 
   const accentColors = [
-    [1.0, 0.17, 0.48],  // Neon pink
-    [0.0, 0.83, 1.0],   // Cyan
-    [1.0, 0.42, 0.21],  // Orange
-    [0.56, 0.0, 1.0],   // Purple
-    [0.0, 1.0, 0.5],    // Green
-    [1.0, 1.0, 0.0],    // Yellow
+    [1.0, 0.17, 0.48],
+    [0.0, 0.83, 1.0],
+    [1.0, 0.42, 0.21],
+    [0.56, 0.0, 1.0],
+    [0.0, 1.0, 0.5],
+    [1.0, 1.0, 0.0],
   ];
 
-  const SAFE_ZONE = 18; // clear area around spawn
+  const SAFE_ZONE = 18;
   for (let bx = -CITY_SIZE; bx < CITY_SIZE; bx += BLOCK_SIZE) {
     for (let bz = -CITY_SIZE; bz < CITY_SIZE; bz += BLOCK_SIZE) {
-      // Skip blocks near spawn point
       if (Math.abs(bx + BLOCK_SIZE/2) < SAFE_ZONE && Math.abs(bz + BLOCK_SIZE/2) < SAFE_ZONE) continue;
       const numBuildings = 2 + Math.floor(Math.random() * 3);
       for (let i = 0; i < numBuildings; i++) {
@@ -454,7 +639,6 @@ function generateCity() {
           neonColor: accentColors[Math.floor(Math.random() * accentColors.length)],
         });
 
-        // Neon signs on buildings
         if (Math.random() > 0.5) {
           const nc = accentColors[Math.floor(Math.random() * accentColors.length)];
           const signW = w * 0.6;
@@ -471,8 +655,6 @@ function generateCity() {
     }
   }
 
-  // 渋谷スクランブル交差点 (大きな交差点)
-  // 109ビル風の建物
   const bigCol = [0.25, 0.2, 0.28];
   const bigMesh = createMesh(buildBox(18, 45, 18, bigCol[0], bigCol[1], bigCol[2]));
   buildings.push({
@@ -480,22 +662,14 @@ function generateCity() {
     hasNeon: true, neonColor: [1.0, 0.17, 0.48],
   });
 
-  // Scramble crossing area - keep open
-  // Add street lights
   for (let x = -CITY_SIZE; x < CITY_SIZE; x += BLOCK_SIZE) {
     for (let z = -CITY_SIZE; z < CITY_SIZE; z += BLOCK_SIZE) {
       if (Math.abs(x) < SAFE_ZONE && Math.abs(z) < SAFE_ZONE) continue;
       if (Math.random() > 0.5) {
         const poleMesh = createMesh(buildBox(0.15, 6, 0.15, 0.3, 0.3, 0.3));
-        buildings.push({
-          mesh: poleMesh, x: x + 1, y: 3, z: z + 1,
-          w: 0.15, h: 6, d: 0.15,
-        });
+        buildings.push({ mesh: poleMesh, x: x+1, y: 3, z: z+1, w: 0.15, h: 6, d: 0.15 });
         const lightMesh = createMesh(buildBox(0.5, 0.5, 0.5, 1.0, 0.95, 0.8));
-        buildings.push({
-          mesh: lightMesh, x: x + 1, y: 6.2, z: z + 1,
-          w: 0.5, h: 0.5, d: 0.5, isSign: true, emissive: 1.0,
-        });
+        buildings.push({ mesh: lightMesh, x: x+1, y: 6.2, z: z+1, w: 0.5, h: 0.5, d: 0.5, isSign: true, emissive: 1.0 });
       }
     }
   }
@@ -506,110 +680,34 @@ function buildGround() {
   const s = CITY_SIZE * 2;
   const verts = [];
   const idx = [];
-  // Road surface
-  verts.push(-s, 0, -s, 0,1,0, 0,0, 0.08,0.08,0.1);
-  verts.push( s, 0, -s, 0,1,0, 1,0, 0.08,0.08,0.1);
-  verts.push( s, 0,  s, 0,1,0, 1,1, 0.08,0.08,0.1);
-  verts.push(-s, 0,  s, 0,1,0, 0,1, 0.08,0.08,0.1);
+  verts.push(-s,0,-s, 0,1,0, 0,0, 0.08,0.08,0.1);
+  verts.push( s,0,-s, 0,1,0, 1,0, 0.08,0.08,0.1);
+  verts.push( s,0, s, 0,1,0, 1,1, 0.08,0.08,0.1);
+  verts.push(-s,0, s, 0,1,0, 0,1, 0.08,0.08,0.1);
   idx.push(0,1,2, 0,2,3);
 
-  // Crosswalk lines (渋谷スクランブル交差点)
   let vi = 4;
   for (let i = -5; i <= 5; i++) {
     const cx = i * 1.2;
-    verts.push(cx-0.4, 0.01, -6, 0,1,0, 0,0, 0.9,0.9,0.9);
-    verts.push(cx+0.4, 0.01, -6, 0,1,0, 0,0, 0.9,0.9,0.9);
-    verts.push(cx+0.4, 0.01,  6, 0,1,0, 0,0, 0.9,0.9,0.9);
-    verts.push(cx-0.4, 0.01,  6, 0,1,0, 0,0, 0.9,0.9,0.9);
+    verts.push(cx-0.4,0.01,-6, 0,1,0, 0,0, 0.9,0.9,0.9);
+    verts.push(cx+0.4,0.01,-6, 0,1,0, 0,0, 0.9,0.9,0.9);
+    verts.push(cx+0.4,0.01, 6, 0,1,0, 0,0, 0.9,0.9,0.9);
+    verts.push(cx-0.4,0.01, 6, 0,1,0, 0,0, 0.9,0.9,0.9);
     idx.push(vi,vi+1,vi+2, vi,vi+2,vi+3);
     vi += 4;
   }
-  // Cross stripes (diagonal)
   for (let i = -5; i <= 5; i++) {
     const cz = i * 1.2;
-    verts.push(-6, 0.01, cz-0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
-    verts.push( 6, 0.01, cz-0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
-    verts.push( 6, 0.01, cz+0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
-    verts.push(-6, 0.01, cz+0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
+    verts.push(-6,0.01,cz-0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
+    verts.push( 6,0.01,cz-0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
+    verts.push( 6,0.01,cz+0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
+    verts.push(-6,0.01,cz+0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
     idx.push(vi,vi+1,vi+2, vi,vi+2,vi+3);
     vi += 4;
   }
-
   return createMesh({ verts, idx, vertCount: idx.length });
 }
 
-// ===== FACE (顔面) GENERATION =====
-function buildFace() {
-  const verts = [];
-  const idx = [];
-  let vi = 0;
-
-  function addSphere(cx, cy, cz, rad, sl, st, r, g, b) {
-    const startVi = vi;
-    for (let i=0; i<=st; i++) {
-      const phi = Math.PI * i / st;
-      for (let j=0; j<=sl; j++) {
-        const theta = 2 * Math.PI * j / sl;
-        const x = Math.sin(phi)*Math.cos(theta);
-        const y = Math.cos(phi);
-        const z = Math.sin(phi)*Math.sin(theta);
-        verts.push(cx+x*rad, cy+y*rad, cz+z*rad, x, y, z, j/sl, i/st, r, g, b);
-        vi++;
-      }
-    }
-    for (let i=0; i<st; i++) {
-      for (let j=0; j<sl; j++) {
-        const a = startVi + i*(sl+1)+j;
-        const b2 = a+sl+1;
-        idx.push(a, b2, a+1, b2, b2+1, a+1);
-      }
-    }
-  }
-
-  // Head (skin color)
-  addSphere(0, 0, 0, 2.5, 16, 12, 0.95, 0.78, 0.65);
-
-  // Left eye (white)
-  addSphere(-0.7, 0.4, 2.0, 0.55, 10, 8, 1.0, 1.0, 1.0);
-  // Right eye (white)
-  addSphere(0.7, 0.4, 2.0, 0.55, 10, 8, 1.0, 1.0, 1.0);
-  // Left pupil
-  addSphere(-0.7, 0.4, 2.45, 0.28, 8, 6, 0.1, 0.1, 0.1);
-  // Right pupil
-  addSphere(0.7, 0.4, 2.45, 0.28, 8, 6, 0.1, 0.1, 0.1);
-  // Left iris
-  addSphere(-0.7, 0.4, 2.35, 0.35, 8, 6, 0.6, 0.1, 0.1);
-  // Right iris
-  addSphere(0.7, 0.4, 2.35, 0.35, 8, 6, 0.6, 0.1, 0.1);
-
-  // Nose
-  addSphere(0, -0.1, 2.2, 0.35, 8, 6, 0.9, 0.7, 0.58);
-
-  // Mouth (big creepy smile)
-  for (let i = 0; i < 12; i++) {
-    const angle = (i / 11) * Math.PI;
-    const mx = Math.cos(angle) * 1.2 - 0.0;
-    const my = -0.9 - Math.sin(angle) * 0.5;
-    addSphere(mx, my, 2.1, 0.15, 6, 4, 0.3, 0.0, 0.0);
-  }
-  // Teeth
-  for (let i = 1; i < 11; i += 2) {
-    const angle = (i / 11) * Math.PI;
-    const mx = Math.cos(angle) * 1.0;
-    const my = -0.85 - Math.sin(angle) * 0.1;
-    addSphere(mx, my, 2.2, 0.13, 6, 4, 1.0, 1.0, 0.95);
-  }
-
-  // Eyebrows (angry/creepy)
-  for (let i = 0; i < 5; i++) {
-    addSphere(-0.7 + (i-2)*0.2, 0.9 + Math.abs(i-2)*0.08, 2.1, 0.1, 6, 4, 0.2, 0.1, 0.05);
-    addSphere(0.7 + (i-2)*0.2, 0.9 + Math.abs(i-2)*0.08, 2.1, 0.1, 6, 4, 0.2, 0.1, 0.05);
-  }
-
-  return createMesh({ verts, idx, vertCount: idx.length });
-}
-
-const faceMesh = buildFace();
 let groundMesh;
 
 // ===== FACE ENTITY =====
@@ -640,10 +738,19 @@ function checkBuildingCollision(nx, nz) {
   return false;
 }
 
-// ===== RENDERING =====
-function drawMesh(mesh, modelMatrix, emissive) {
+// ===== VIEW MATRIX =====
+function getViewMatrix() {
+  let v = mat4Identity();
+  v = mat4RotateX(v, -playerRot.x);
+  v = mat4RotateY(v, -playerRot.y);
+  v = mat4Translate(v, -playerPos.x, -playerPos.y, -playerPos.z);
+  return v;
+}
+
+// ===== BUILDING RENDERING =====
+function drawMesh(mesh, modelMatrix, viewMatrix, projMatrix, emissive) {
   gl.bindBuffer(gl.ARRAY_BUFFER, mesh.vBuf);
-  const stride = 44; // 11 floats * 4 bytes
+  const stride = 44;
   gl.vertexAttribPointer(locs.aPosition, 3, gl.FLOAT, false, stride, 0);
   gl.vertexAttribPointer(locs.aNormal, 3, gl.FLOAT, false, stride, 12);
   gl.vertexAttribPointer(locs.aTexCoord, 2, gl.FLOAT, false, stride, 24);
@@ -655,17 +762,51 @@ function drawMesh(mesh, modelMatrix, emissive) {
 
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.iBuf);
 
-  let viewMatrix = mat4Identity();
-  viewMatrix = mat4RotateX(viewMatrix, -playerRot.x);
-  viewMatrix = mat4RotateY(viewMatrix, -playerRot.y);
-  viewMatrix = mat4Translate(viewMatrix, -playerPos.x, -playerPos.y, -playerPos.z);
-
   const mvMatrix = mat4Multiply(viewMatrix, modelMatrix);
   gl.uniformMatrix4fv(locs.uModelView, false, mvMatrix);
+  gl.uniformMatrix4fv(locs.uProjection, false, projMatrix);
   gl.uniformMatrix4fv(locs.uModel, false, modelMatrix);
   gl.uniform1f(locs.uEmissive, emissive || 0);
 
   gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
+}
+
+// ===== FACE BILLBOARD RENDERING =====
+function drawFaceBillboard(f, viewMatrix, projMatrix) {
+  gl.useProgram(bbProgram);
+
+  // Billboard: translate, face player, wobble, scale
+  let model = mat4Identity();
+  model = mat4Translate(model, f.x, f.y, f.z);
+  const angle = Math.atan2(playerPos.x - f.x, playerPos.z - f.z);
+  model = mat4RotateY(model, angle);
+  model = mat4RotateX(model, Math.sin(f.wobble * 2) * 0.1);
+  const s = f.scale * 2.5;
+  model = mat4Scale(model, s, s, s);
+
+  const mvp = mat4Multiply(projMatrix, mat4Multiply(viewMatrix, model));
+
+  // Fog based on distance
+  const dx = f.x - playerPos.x, dz = f.z - playerPos.z;
+  const dist = Math.sqrt(dx*dx + dz*dz);
+  const fog = Math.max(0, Math.min(1, 1 - dist / 120));
+
+  gl.uniformMatrix4fv(bbLocs.uBBMVP, false, mvp);
+  gl.uniform1f(bbLocs.uBBFog, fog);
+  gl.uniform3f(bbLocs.uBBFogCol, 0.02, 0.01, 0.05);
+
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, faceTexture);
+  gl.uniform1i(bbLocs.uBBTex, 0);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadVBuf);
+  gl.vertexAttribPointer(bbLocs.aBBPos, 3, gl.FLOAT, false, 20, 0);
+  gl.vertexAttribPointer(bbLocs.aBBUV, 2, gl.FLOAT, false, 20, 12);
+  gl.enableVertexAttribArray(bbLocs.aBBPos);
+  gl.enableVertexAttribArray(bbLocs.aBBUV);
+
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, quadIBuf);
+  gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
 }
 
 // ===== MINIMAP =====
@@ -685,7 +826,6 @@ function drawMinimap() {
   const scale = 1.5;
   const cx = w/2, cy = h/2;
 
-  // Buildings on minimap
   ctx.fillStyle = 'rgba(60,50,80,0.7)';
   for (const b of buildings) {
     if (b.isSign) continue;
@@ -695,7 +835,6 @@ function drawMinimap() {
     ctx.fillRect(cx + dx - b.w*scale/2, cy + dz - b.d*scale/2, b.w*scale, b.d*scale);
   }
 
-  // Faces on minimap
   for (const f of faces) {
     const dx = (f.x - playerPos.x) * scale;
     const dz = (f.z - playerPos.z) * scale;
@@ -704,18 +843,13 @@ function drawMinimap() {
     ctx.arc(cx + dx, cy + dz, 4, 0, Math.PI*2);
     ctx.fillStyle = '#ff0044';
     ctx.fill();
-    ctx.strokeStyle = '#ff0044';
-    ctx.lineWidth = 1;
-    ctx.stroke();
   }
 
-  // Player
   ctx.beginPath();
   ctx.arc(cx, cy, 3, 0, Math.PI*2);
   ctx.fillStyle = '#00ff88';
   ctx.fill();
 
-  // Player direction
   ctx.beginPath();
   ctx.moveTo(cx, cy);
   ctx.lineTo(cx + Math.sin(playerRot.y)*12, cy - Math.cos(playerRot.y)*12);
@@ -725,7 +859,6 @@ function drawMinimap() {
 
   ctx.restore();
 
-  // Border
   ctx.beginPath();
   ctx.arc(w/2, h/2, w/2-2, 0, Math.PI*2);
   ctx.strokeStyle = '#ff2d7b';
@@ -740,40 +873,34 @@ function update(dt) {
   survivalTime += dt;
   score = Math.floor(survivalTime * 10);
 
-  // Player movement
   const speed = isSprinting ? sprintSpeed : playerSpeed;
   let moveX = 0, moveZ = 0;
-  if (keys['w'] || keys['arrowup']) { moveX -= Math.sin(playerRot.y); moveZ -= Math.cos(playerRot.y); }
-  if (keys['s'] || keys['arrowdown']) { moveX += Math.sin(playerRot.y); moveZ += Math.cos(playerRot.y); }
-  if (keys['a'] || keys['arrowleft']) { moveX -= Math.cos(playerRot.y); moveZ += Math.sin(playerRot.y); }
+  if (keys['w'] || keys['arrowup'])    { moveX -= Math.sin(playerRot.y); moveZ -= Math.cos(playerRot.y); }
+  if (keys['s'] || keys['arrowdown'])  { moveX += Math.sin(playerRot.y); moveZ += Math.cos(playerRot.y); }
+  if (keys['a'] || keys['arrowleft'])  { moveX -= Math.cos(playerRot.y); moveZ += Math.sin(playerRot.y); }
   if (keys['d'] || keys['arrowright']) { moveX += Math.cos(playerRot.y); moveZ -= Math.sin(playerRot.y); }
 
   if (moveX !== 0 || moveZ !== 0) {
     const len = Math.sqrt(moveX*moveX + moveZ*moveZ);
     moveX = moveX/len * speed;
     moveZ = moveZ/len * speed;
-
     const nx = playerPos.x + moveX;
     const nz = playerPos.z + moveZ;
     if (!checkBuildingCollision(nx, playerPos.z)) playerPos.x = nx;
     if (!checkBuildingCollision(playerPos.x, nz)) playerPos.z = nz;
   }
 
-  // Head bobbing
   if (moveX !== 0 || moveZ !== 0) {
     playerPos.y = 1.7 + Math.sin(survivalTime * 10) * 0.05;
   }
 
-  // Spawn more faces over time
   const targetFaces = Math.min(1 + Math.floor(survivalTime / 15), 8);
   while (faces.length < targetFaces) {
     faces.push(spawnFace());
   }
 
-  // Update faces
   let closestDist = Infinity;
   for (const f of faces) {
-    // Chase player
     const dx = playerPos.x - f.x;
     const dz = playerPos.z - f.z;
     const dist = Math.sqrt(dx*dx + dz*dz);
@@ -781,8 +908,6 @@ function update(dt) {
     if (dist > 0.1) {
       const dirX = dx / dist;
       const dirZ = dz / dist;
-
-      // Speed increases when closer
       const speedMult = 1 + Math.max(0, (30 - dist)) * 0.03;
       const nx = f.x + dirX * f.speed * speedMult;
       const nz = f.z + dirZ * f.speed * speedMult;
@@ -791,7 +916,6 @@ function update(dt) {
         f.x = nx;
         f.z = nz;
       } else {
-        // Try to go around
         f.x += dirZ * f.speed * 0.5;
         f.z -= dirX * f.speed * 0.5;
       }
@@ -802,14 +926,12 @@ function update(dt) {
 
     if (dist < closestDist) closestDist = dist;
 
-    // Catch check
     if (dist < 2.5) {
       gameOver();
       return;
     }
   }
 
-  // Warning indicator
   const warning = document.getElementById('warning');
   if (closestDist < 15) {
     warning.style.opacity = Math.max(0, 1 - closestDist / 15);
@@ -818,7 +940,6 @@ function update(dt) {
     warning.style.opacity = 0;
   }
 
-  // Update UI
   document.getElementById('score-val').textContent = score;
   document.getElementById('time-val').textContent = Math.floor(survivalTime) + 's';
   document.getElementById('face-count').textContent = faces.length;
@@ -830,37 +951,46 @@ function render() {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   gl.enable(gl.DEPTH_TEST);
   gl.enable(gl.CULL_FACE);
-
-  gl.useProgram(program);
+  gl.frontFace(gl.CW); // Fix: match box winding order
 
   const proj = mat4Perspective(Math.PI / 3, canvas.width / canvas.height, 0.1, 200);
-  gl.uniformMatrix4fv(locs.uProjection, false, proj);
+  const view = getViewMatrix();
+
+  // --- Draw buildings & ground ---
+  gl.useProgram(program);
   gl.uniform3f(locs.uLightDir, 0.3, 1.0, 0.5);
   gl.uniform3f(locs.uAmbient, 0.15, 0.12, 0.2);
   gl.uniform3f(locs.uFogColor, 0.02, 0.01, 0.05);
 
-  // Ground
-  drawMesh(groundMesh, mat4Identity(), 0);
+  drawMesh(groundMesh, mat4Identity(), view, proj, 0);
 
-  // Buildings
   for (const b of buildings) {
     const model = mat4Translate(mat4Identity(), b.x, b.y, b.z);
-    drawMesh(b.mesh, model, b.emissive || 0);
+    drawMesh(b.mesh, model, view, proj, b.emissive || 0);
   }
 
-  // Faces
+  // Disable attribs from building shader before switching
+  gl.disableVertexAttribArray(locs.aPosition);
+  gl.disableVertexAttribArray(locs.aNormal);
+  gl.disableVertexAttribArray(locs.aTexCoord);
+  gl.disableVertexAttribArray(locs.aColor);
+
+  // --- Draw face billboards ---
+  gl.disable(gl.CULL_FACE);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
   for (const f of faces) {
-    let model = mat4Translate(mat4Identity(), f.x, f.y, f.z);
-    model = mat4Scale(model, f.scale, f.scale, f.scale);
-    // Face always looks at player
-    const angle = Math.atan2(playerPos.x - f.x, playerPos.z - f.z);
-    model = mat4RotateY(model, angle);
-    // Creepy wobble
-    model = mat4RotateX(model, Math.sin(f.wobble * 2) * 0.1);
-    drawMesh(faceMesh, model, 0.15);
+    drawFaceBillboard(f, view, proj);
   }
 
-  // Minimap
+  gl.disable(gl.BLEND);
+  gl.enable(gl.CULL_FACE);
+
+  // Disable billboard attribs
+  gl.disableVertexAttribArray(bbLocs.aBBPos);
+  gl.disableVertexAttribArray(bbLocs.aBBUV);
+
   drawMinimap();
 }
 
@@ -879,7 +1009,9 @@ function gameLoop(time) {
 // ===== GAME STATE =====
 function startGame() {
   document.getElementById('start-screen').style.display = 'none';
-  canvas.requestPointerLock();
+
+  // Try pointer lock for best experience, but works without it too
+  try { canvas.requestPointerLock(); } catch(e) {}
 
   playerPos = { x: 0, y: 1.7, z: 0 };
   playerRot = { x: 0, y: 0 };
@@ -896,7 +1028,7 @@ function startGame() {
 
 function gameOver() {
   gameRunning = false;
-  document.exitPointerLock();
+  try { document.exitPointerLock(); } catch(e) {}
   document.getElementById('final-score-val').textContent = score;
   document.getElementById('game-over').style.display = 'flex';
 }
@@ -917,31 +1049,30 @@ document.addEventListener('keyup', (e) => {
   if (e.key === 'Shift') isSprinting = false;
 });
 
+// Mouse look: works with AND without pointer lock
 document.addEventListener('mousemove', (e) => {
-  if (document.pointerLockElement === canvas) {
-    playerRot.y += e.movementX * 0.003;
-    playerRot.x += e.movementY * 0.003;
-    playerRot.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, playerRot.x));
-  }
+  if (!gameRunning) return;
+  const mx = e.movementX || 0;
+  const my = e.movementY || 0;
+  playerRot.y += mx * 0.003;
+  playerRot.x += my * 0.003;
+  playerRot.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, playerRot.x));
 });
 
 canvas.addEventListener('click', () => {
-  if (gameRunning && document.pointerLockElement !== canvas) {
-    canvas.requestPointerLock();
+  if (gameRunning) {
+    try { canvas.requestPointerLock(); } catch(e) {}
   }
 });
 
 // Mobile controls
 ['mb-up','mb-down','mb-left','mb-right'].forEach(id => {
   const el = document.getElementById(id);
-  const key = {
-    'mb-up': 'w', 'mb-down': 's', 'mb-left': 'a', 'mb-right': 'd'
-  }[id];
+  const key = { 'mb-up':'w', 'mb-down':'s', 'mb-left':'a', 'mb-right':'d' }[id];
   el.addEventListener('touchstart', (e) => { e.preventDefault(); keys[key] = true; });
   el.addEventListener('touchend', (e) => { e.preventDefault(); keys[key] = false; });
 });
 
-// Touch look
 let lastTouchX = 0, lastTouchY = 0;
 canvas.addEventListener('touchstart', (e) => {
   if (e.touches.length === 1) {
@@ -961,13 +1092,11 @@ canvas.addEventListener('touchmove', (e) => {
   }
 });
 
-// Resize
 window.addEventListener('resize', () => {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
 });
 
-// Start loop (renders even before game starts)
 requestAnimationFrame(gameLoop);
 </script>
 </body>
