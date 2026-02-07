@@ -6,7 +6,7 @@
 <title>Shibuya Face Escape</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; cursor: crosshair; }
+body { overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
 canvas { display: block; }
 
 #ui-overlay {
@@ -38,6 +38,16 @@ canvas { display: block; }
   text-shadow: 0 0 30px #ff0000; opacity: 0;
   transition: opacity 0.2s;
 }
+
+#crosshair {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 20px; height: 20px; pointer-events: none; z-index: 15; display: none;
+}
+#crosshair::before, #crosshair::after {
+  content: ''; position: absolute; background: rgba(255,255,255,0.6);
+}
+#crosshair::before { width: 2px; height: 20px; left: 9px; top: 0; }
+#crosshair::after { width: 20px; height: 2px; left: 0; top: 9px; }
 
 #start-screen {
   position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -137,7 +147,7 @@ canvas { display: block; }
   <div class="subtitle">FACE ESCAPE</div>
   <div class="instructions">
     <span>WASD</span> / <span>Arrow Keys</span> : Move<br>
-    <span>Mouse</span> : Look around<br>
+    <span>Mouse</span> : Look around (click to lock cursor)<br>
     <span>SHIFT</span> : Sprint<br>
     Run from the giant faces! Don't get caught!
   </div>
@@ -159,6 +169,8 @@ canvas { display: block; }
   <canvas id="minimap" width="180" height="180"></canvas>
   <div id="warning">WARNING!</div>
 </div>
+
+<div id="crosshair"></div>
 
 <div id="controls-mobile">
   <div class="mobile-btn" id="mb-up">&#9650;</div>
@@ -191,6 +203,39 @@ let faces = [];
 let buildings = [];
 let keys = {};
 let lastTime = 0;
+let pointerLocked = false;
+let mouseScreenX = window.innerWidth / 2;
+let mouseScreenY = window.innerHeight / 2;
+
+// ===== PROXIMITY AUDIO =====
+let bgMusic = null;
+let musicReady = false;
+
+function initMusic() {
+  if (bgMusic) return;
+  bgMusic = new Audio('https://www.myinstants.com/media/sounds/you-are-an-idiot.mp3');
+  bgMusic.loop = true;
+  bgMusic.volume = 0;
+  bgMusic.play().then(() => { musicReady = true; }).catch(() => {
+    // Autoplay blocked, will retry on next user interaction
+    const resumeAudio = () => {
+      bgMusic.play().then(() => { musicReady = true; }).catch(() => {});
+      document.removeEventListener('click', resumeAudio);
+      document.removeEventListener('keydown', resumeAudio);
+    };
+    document.addEventListener('click', resumeAudio);
+    document.addEventListener('keydown', resumeAudio);
+  });
+}
+
+function stopMusic() {
+  if (bgMusic) {
+    bgMusic.pause();
+    bgMusic.currentTime = 0;
+    musicReady = false;
+    bgMusic = null;
+  }
+}
 
 // ===== BUILDING SHADER =====
 const vsSource = `
@@ -418,165 +463,30 @@ function createMesh(data) {
   };
 }
 
-// ===== 2D FACE TEXTURE =====
-function createFaceTexture() {
-  const sz = 256, c = document.createElement('canvas');
-  c.width = sz; c.height = sz;
-  const g = c.getContext('2d');
-  const cx = sz/2, cy = sz/2;
+// ===== FACE TEXTURE FROM URL =====
+let faceTexture = gl.createTexture();
+let faceImgLoaded = false;
+const faceImg = new Image();
+faceImg.crossOrigin = 'anonymous';
 
-  g.clearRect(0, 0, sz, sz);
+// Initialize with a 1x1 red pixel placeholder
+gl.bindTexture(gl.TEXTURE_2D, faceTexture);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 0, 0, 255]));
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-  // Head
-  g.beginPath();
-  g.arc(cx, cy, 115, 0, Math.PI*2);
-  g.fillStyle = '#f0c090';
-  g.fill();
-  g.strokeStyle = '#b08060';
-  g.lineWidth = 3;
-  g.stroke();
-
-  // Cheek shadows
-  g.beginPath();
-  g.arc(cx - 55, cy + 25, 30, 0, Math.PI*2);
-  g.fillStyle = 'rgba(200,100,100,0.15)';
-  g.fill();
-  g.beginPath();
-  g.arc(cx + 55, cy + 25, 30, 0, Math.PI*2);
-  g.fill();
-
-  // Eye sockets (dark circles)
-  g.beginPath();
-  g.ellipse(cx - 38, cy - 10, 32, 36, 0, 0, Math.PI*2);
-  g.fillStyle = 'rgba(80,40,60,0.2)';
-  g.fill();
-  g.beginPath();
-  g.ellipse(cx + 38, cy - 10, 32, 36, 0, 0, Math.PI*2);
-  g.fill();
-
-  // Eyes (white)
-  g.beginPath();
-  g.ellipse(cx - 38, cy - 12, 26, 30, 0, 0, Math.PI*2);
-  g.fillStyle = '#fff';
-  g.fill();
-  g.strokeStyle = '#444';
-  g.lineWidth = 2;
-  g.stroke();
-  g.beginPath();
-  g.ellipse(cx + 38, cy - 12, 26, 30, 0, 0, Math.PI*2);
-  g.fillStyle = '#fff';
-  g.fill();
-  g.stroke();
-
-  // Bloodshot veins
-  g.strokeStyle = 'rgba(200,0,0,0.3)';
-  g.lineWidth = 1;
-  [[-55,-20,-38,-12], [-20,-25,-38,-12], [-55,-5,-38,-5],
-   [55,-20,38,-12], [20,-25,38,-12], [55,-5,38,-5]].forEach(v => {
-    g.beginPath();
-    g.moveTo(cx+v[0], cy+v[1]);
-    g.lineTo(cx+v[2], cy+v[3]);
-    g.stroke();
-  });
-
-  // Irises (red)
-  g.beginPath();
-  g.arc(cx - 38, cy - 8, 14, 0, Math.PI*2);
-  g.fillStyle = '#cc1100';
-  g.fill();
-  g.beginPath();
-  g.arc(cx + 38, cy - 8, 14, 0, Math.PI*2);
-  g.fillStyle = '#cc1100';
-  g.fill();
-
-  // Pupils (tiny, cross-eyed)
-  g.beginPath();
-  g.arc(cx - 34, cy - 8, 6, 0, Math.PI*2);
-  g.fillStyle = '#000';
-  g.fill();
-  g.beginPath();
-  g.arc(cx + 34, cy - 8, 6, 0, Math.PI*2);
-  g.fillStyle = '#000';
-  g.fill();
-
-  // Eye highlights
-  g.beginPath();
-  g.arc(cx - 42, cy - 16, 4, 0, Math.PI*2);
-  g.fillStyle = 'rgba(255,255,255,0.8)';
-  g.fill();
-  g.beginPath();
-  g.arc(cx + 34, cy - 16, 4, 0, Math.PI*2);
-  g.fill();
-
-  // Angry eyebrows
-  g.lineWidth = 7;
-  g.lineCap = 'round';
-  g.strokeStyle = '#3a1a0a';
-  g.beginPath();
-  g.moveTo(cx - 65, cy - 32);
-  g.lineTo(cx - 15, cy - 48);
-  g.stroke();
-  g.beginPath();
-  g.moveTo(cx + 65, cy - 32);
-  g.lineTo(cx + 15, cy - 48);
-  g.stroke();
-
-  // Nose
-  g.beginPath();
-  g.moveTo(cx, cy - 2);
-  g.lineTo(cx - 10, cy + 22);
-  g.quadraticCurveTo(cx, cy + 28, cx + 10, cy + 22);
-  g.closePath();
-  g.fillStyle = '#d8a878';
-  g.fill();
-
-  // Mouth (wide grin)
-  g.beginPath();
-  g.arc(cx, cy + 48, 55, 0.15, Math.PI - 0.15);
-  g.fillStyle = '#300000';
-  g.fill();
-  g.strokeStyle = '#200000';
-  g.lineWidth = 3;
-  g.stroke();
-
-  // Teeth top row
-  for (let i = 0; i < 9; i++) {
-    const angle = 0.15 + (Math.PI - 0.3) * i / 8;
-    const tx = cx + Math.cos(angle) * 50;
-    const ty = cy + 48 + Math.sin(angle) * 50 - 14;
-    g.fillStyle = '#ffe';
-    g.fillRect(tx - 5, ty - 2, 10, 14);
-    g.strokeStyle = '#cca';
-    g.lineWidth = 0.5;
-    g.strokeRect(tx - 5, ty - 2, 10, 14);
-  }
-
-  // Gum line
-  g.beginPath();
-  g.arc(cx, cy + 48, 52, 0.2, Math.PI - 0.2);
-  g.strokeStyle = '#cc4444';
-  g.lineWidth = 3;
-  g.stroke();
-
-  // Wrinkle lines around mouth
-  g.strokeStyle = 'rgba(160,100,70,0.3)';
-  g.lineWidth = 1.5;
-  g.beginPath();
-  g.arc(cx, cy + 45, 65, 0.3, Math.PI - 0.3);
-  g.stroke();
-
-  // Create WebGL texture
-  const tex = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+faceImg.onload = function() {
+  gl.bindTexture(gl.TEXTURE_2D, faceTexture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, faceImg);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  return tex;
-}
-
-const faceTexture = createFaceTexture();
+  faceImgLoaded = true;
+};
+faceImg.src = 'https://241829.com/20260207.gif';
 
 // Billboard quad: pos(x,y,z) + uv(u,v) = 5 floats per vert
 const quadVerts = new Float32Array([
@@ -775,6 +685,12 @@ function drawMesh(mesh, modelMatrix, viewMatrix, projMatrix, emissive) {
 function drawFaceBillboard(f, viewMatrix, projMatrix) {
   gl.useProgram(bbProgram);
 
+  // Re-upload GIF texture each frame to capture animation
+  if (faceImgLoaded) {
+    gl.bindTexture(gl.TEXTURE_2D, faceTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, faceImg);
+  }
+
   // Billboard: translate, face player, wobble, scale
   let model = mat4Identity();
   model = mat4Translate(model, f.x, f.y, f.z);
@@ -873,6 +789,29 @@ function update(dt) {
   survivalTime += dt;
   score = Math.floor(survivalTime * 10);
 
+  // When NOT in pointer lock, apply continuous rotation based on mouse offset from center
+  if (!pointerLocked) {
+    const cx = window.innerWidth / 2;
+    const cy = window.innerHeight / 2;
+    const dx = (mouseScreenX - cx) / cx; // -1 to 1
+    const dy = (mouseScreenY - cy) / cy; // -1 to 1
+    // Apply dead zone in center (10% of screen)
+    const deadZone = 0.1;
+    const turnSpeedY = 0.06;
+    const turnSpeedX = 0.03;
+    if (Math.abs(dx) > deadZone) {
+      const sign = dx > 0 ? 1 : -1;
+      const magnitude = (Math.abs(dx) - deadZone) / (1 - deadZone);
+      playerRot.y += sign * magnitude * turnSpeedY;
+    }
+    if (Math.abs(dy) > deadZone) {
+      const sign = dy > 0 ? 1 : -1;
+      const magnitude = (Math.abs(dy) - deadZone) / (1 - deadZone);
+      playerRot.x += sign * magnitude * turnSpeedX;
+    }
+    playerRot.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, playerRot.x));
+  }
+
   const speed = isSprinting ? sprintSpeed : playerSpeed;
   let moveX = 0, moveZ = 0;
   if (keys['w'] || keys['arrowup'])    { moveX -= Math.sin(playerRot.y); moveZ -= Math.cos(playerRot.y); }
@@ -930,6 +869,13 @@ function update(dt) {
       gameOver();
       return;
     }
+  }
+
+  // Update music volume based on proximity to nearest face
+  if (bgMusic && musicReady) {
+    const maxDist = 50;
+    const vol = Math.max(0, Math.min(1, 1 - closestDist / maxDist));
+    bgMusic.volume = vol;
   }
 
   const warning = document.getElementById('warning');
@@ -1009,9 +955,7 @@ function gameLoop(time) {
 // ===== GAME STATE =====
 function startGame() {
   document.getElementById('start-screen').style.display = 'none';
-
-  // Try pointer lock for best experience, but works without it too
-  try { canvas.requestPointerLock(); } catch(e) {}
+  document.getElementById('crosshair').style.display = 'block';
 
   playerPos = { x: 0, y: 1.7, z: 0 };
   playerRot = { x: 0, y: 0 };
@@ -1022,13 +966,21 @@ function startGame() {
   generateCity();
   groundMesh = buildGround();
 
+  // Init proximity music
+  initMusic();
+
+  // Request pointer lock for FPS controls
+  canvas.requestPointerLock();
+
   gameRunning = true;
   lastTime = performance.now();
 }
 
 function gameOver() {
   gameRunning = false;
+  stopMusic();
   try { document.exitPointerLock(); } catch(e) {}
+  document.getElementById('crosshair').style.display = 'none';
   document.getElementById('final-score-val').textContent = score;
   document.getElementById('game-over').style.display = 'flex';
 }
@@ -1037,6 +989,12 @@ function restartGame() {
   document.getElementById('game-over').style.display = 'none';
   startGame();
 }
+
+// ===== POINTER LOCK TRACKING =====
+document.addEventListener('pointerlockchange', () => {
+  pointerLocked = document.pointerLockElement === canvas;
+  document.body.style.cursor = pointerLocked ? 'none' : 'crosshair';
+});
 
 // ===== INPUT =====
 document.addEventListener('keydown', (e) => {
@@ -1049,19 +1007,30 @@ document.addEventListener('keyup', (e) => {
   if (e.key === 'Shift') isSprinting = false;
 });
 
-// Mouse look: works with AND without pointer lock
+// Mouse look: dual mode
+// - With pointer lock: direct FPS mouse look using movementX/Y
+// - Without pointer lock: mouse position relative to screen center continuously rotates view
 document.addEventListener('mousemove', (e) => {
   if (!gameRunning) return;
-  const mx = e.movementX || 0;
-  const my = e.movementY || 0;
-  playerRot.y += mx * 0.003;
-  playerRot.x += my * 0.003;
-  playerRot.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, playerRot.x));
+
+  if (pointerLocked) {
+    // Pointer lock mode: standard FPS mouse look
+    const mx = e.movementX || 0;
+    const my = e.movementY || 0;
+    playerRot.y += mx * 0.003;
+    playerRot.x += my * 0.003;
+    playerRot.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, playerRot.x));
+  } else {
+    // No pointer lock: track mouse position for virtual joystick mode
+    mouseScreenX = e.clientX;
+    mouseScreenY = e.clientY;
+  }
 });
 
+// Click to request pointer lock
 canvas.addEventListener('click', () => {
-  if (gameRunning) {
-    try { canvas.requestPointerLock(); } catch(e) {}
+  if (gameRunning && !pointerLocked) {
+    canvas.requestPointerLock();
   }
 });
 
