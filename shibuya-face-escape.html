@@ -25,6 +25,21 @@ canvas { display: block; }
 #score-panel .label { color: #aaa; font-size: 14px; }
 #score-panel .value { color: #ff2d7b; font-weight: bold; font-size: 22px; }
 
+#speed-bar-container {
+  position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%);
+  width: 300px; height: 8px; background: rgba(0,0,0,0.5);
+  border-radius: 4px; border: 1px solid rgba(255,45,123,0.3);
+}
+#speed-bar {
+  height: 100%; width: 0%; border-radius: 4px;
+  background: linear-gradient(90deg, #ff2d7b, #ffff00, #00ff88);
+  transition: width 0.1s;
+}
+#speed-label {
+  position: absolute; bottom: 72px; left: 50%; transform: translateX(-50%);
+  color: #aaa; font-size: 12px; letter-spacing: 2px;
+}
+
 #minimap {
   position: absolute; bottom: 20px; right: 20px;
   width: 180px; height: 180px;
@@ -149,7 +164,7 @@ canvas { display: block; }
     <span>WASD</span> / <span>Arrow Keys</span> : Move<br>
     <span>Mouse</span> : Look around (click to lock cursor)<br>
     <span>SHIFT</span> : Sprint<br>
-    <span>SPACE</span> : Hop (chain for speed boost!)<br>
+    <span>SPACE</span> : Bhop (spam while moving to build speed!)<br>
     Run from the giant faces! Don't get caught!
   </div>
   <button id="start-btn" onclick="startGame()">START GAME</button>
@@ -166,8 +181,10 @@ canvas { display: block; }
     <div><span class="label">SCORE</span><br><span class="value" id="score-val">0</span></div>
     <div style="margin-top:8px"><span class="label">TIME</span><br><span class="value" id="time-val">0s</span></div>
     <div style="margin-top:8px"><span class="label">FACES</span><br><span class="value" id="face-count">1</span></div>
-    <div style="margin-top:8px"><span class="label">HOP CHAIN</span><br><span class="value" id="hop-chain">0</span></div>
+    <div style="margin-top:8px"><span class="label">SPEED</span><br><span class="value" id="speed-val">0</span></div>
   </div>
+  <div id="speed-label">BHOP SPEED</div>
+  <div id="speed-bar-container"><div id="speed-bar"></div></div>
   <canvas id="minimap" width="180" height="180"></canvas>
   <div id="warning">WARNING!</div>
 </div>
@@ -198,8 +215,9 @@ let score = 0;
 let survivalTime = 0;
 let playerPos = { x: 0, y: 1.7, z: 0 };
 let playerRot = { x: 0, y: 0 };
-let playerSpeed = 0.12;
-let sprintSpeed = 0.22;
+// 1 unit = 1 meter. Walk ~5m/s, sprint ~8m/s at 60fps
+let playerSpeed = 0.08;
+let sprintSpeed = 0.14;
 let isSprinting = false;
 let faces = [];
 let buildings = [];
@@ -209,17 +227,19 @@ let pointerLocked = false;
 let mouseScreenX = window.innerWidth / 2;
 let mouseScreenY = window.innerHeight / 2;
 
-// ===== HOP SYSTEM =====
-let isHopping = false;
-let hopVelocityY = 0;
-let hopChain = 0;          // consecutive well-timed hops
-let hopSpeedBonus = 0;     // extra speed from hop chain
-let lastLandTime = 0;      // when player last landed
-const HOP_FORCE = 0.12;
-const GRAVITY = 0.006;
-const HOP_WINDOW = 400;    // ms window after landing to chain hop
-const HOP_BONUS_PER_CHAIN = 0.03; // speed bonus per chain level
-const MAX_HOP_CHAIN = 8;
+// ===== BHOP SYSTEM (Nico's Nextbots style) =====
+// Spam space while moving to build speed. Speed accumulates per successful hop.
+let isInAir = false;
+let verticalVel = 0;
+let bhopSpeed = 0;              // accumulated bhop bonus speed
+let isMoving = false;           // is player pressing movement keys
+let spaceHeld = false;          // is space held down
+const BHOP_JUMP_FORCE = 0.15;
+const BHOP_GRAVITY = 0.007;
+const BHOP_ACCEL = 0.012;       // speed added per successful bhop landing
+const BHOP_MAX = 0.45;          // max bhop bonus (~27m/s at 60fps + base)
+const BHOP_DECAY = 0.15;        // decay rate per second when not bhopping
+const GROUND_Y = 1.7;
 
 // ===== PROXIMITY AUDIO =====
 let bgMusic = null;
@@ -231,7 +251,6 @@ function initMusic() {
   bgMusic.loop = true;
   bgMusic.volume = 0;
   bgMusic.play().then(() => { musicReady = true; }).catch(() => {
-    // Autoplay blocked, will retry on next user interaction
     const resumeAudio = () => {
       bgMusic.play().then(() => { musicReady = true; }).catch(() => {});
       document.removeEventListener('click', resumeAudio);
@@ -273,7 +292,7 @@ const vsSource = `
     vTexCoord = aTexCoord;
     vColor = aColor;
     float dist = length((uModelView * aPosition).xyz);
-    vFog = clamp(1.0 - dist / 120.0, 0.0, 1.0);
+    vFog = clamp(1.0 - dist / 350.0, 0.0, 1.0);
   }
 `;
 
@@ -349,7 +368,6 @@ function createProgram(vsSrc, fsSrc) {
   return p;
 }
 
-// Building shader
 const program = createProgram(vsSource, fsSource);
 const locs = {
   aPosition: gl.getAttribLocation(program, 'aPosition'),
@@ -365,7 +383,6 @@ const locs = {
   uEmissive: gl.getUniformLocation(program, 'uEmissive'),
 };
 
-// Billboard shader
 const bbProgram = createProgram(bbVS, bbFS);
 const bbLocs = {
   aBBPos: gl.getAttribLocation(bbProgram, 'aBBPos'),
@@ -377,80 +394,60 @@ const bbLocs = {
 };
 
 // ===== MATRIX MATH =====
-function mat4Identity() {
-  return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
-}
+function mat4Identity() { return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); }
 
 function mat4Perspective(fov, aspect, near, far) {
-  const f = 1.0 / Math.tan(fov / 2);
-  const nf = 1 / (near - far);
-  return new Float32Array([
-    f/aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,(2*far*near)*nf,0
-  ]);
+  const f = 1.0 / Math.tan(fov / 2), nf = 1 / (near - far);
+  return new Float32Array([f/aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,(2*far*near)*nf,0]);
 }
 
 function mat4Translate(m, x, y, z) {
   const r = new Float32Array(m);
-  r[12] += r[0]*x + r[4]*y + r[8]*z;
-  r[13] += r[1]*x + r[5]*y + r[9]*z;
-  r[14] += r[2]*x + r[6]*y + r[10]*z;
-  r[15] += r[3]*x + r[7]*y + r[11]*z;
+  r[12]+=r[0]*x+r[4]*y+r[8]*z; r[13]+=r[1]*x+r[5]*y+r[9]*z;
+  r[14]+=r[2]*x+r[6]*y+r[10]*z; r[15]+=r[3]*x+r[7]*y+r[11]*z;
   return r;
 }
 
 function mat4Scale(m, x, y, z) {
   const r = new Float32Array(m);
-  r[0]*=x; r[1]*=x; r[2]*=x; r[3]*=x;
-  r[4]*=y; r[5]*=y; r[6]*=y; r[7]*=y;
-  r[8]*=z; r[9]*=z; r[10]*=z; r[11]*=z;
-  return r;
+  r[0]*=x;r[1]*=x;r[2]*=x;r[3]*=x; r[4]*=y;r[5]*=y;r[6]*=y;r[7]*=y;
+  r[8]*=z;r[9]*=z;r[10]*=z;r[11]*=z; return r;
 }
 
 function mat4RotateX(m, a) {
-  const s=Math.sin(a), c=Math.cos(a), r=new Float32Array(m);
+  const s=Math.sin(a),c=Math.cos(a),r=new Float32Array(m);
   const a4=m[4],a5=m[5],a6=m[6],a7=m[7],a8=m[8],a9=m[9],a10=m[10],a11=m[11];
-  r[4]=a4*c+a8*s; r[5]=a5*c+a9*s; r[6]=a6*c+a10*s; r[7]=a7*c+a11*s;
-  r[8]=a8*c-a4*s; r[9]=a9*c-a5*s; r[10]=a10*c-a6*s; r[11]=a11*c-a7*s;
-  return r;
+  r[4]=a4*c+a8*s;r[5]=a5*c+a9*s;r[6]=a6*c+a10*s;r[7]=a7*c+a11*s;
+  r[8]=a8*c-a4*s;r[9]=a9*c-a5*s;r[10]=a10*c-a6*s;r[11]=a11*c-a7*s; return r;
 }
 
 function mat4RotateY(m, a) {
-  const s=Math.sin(a), c=Math.cos(a), r=new Float32Array(m);
+  const s=Math.sin(a),c=Math.cos(a),r=new Float32Array(m);
   const a0=m[0],a1=m[1],a2=m[2],a3=m[3],a8=m[8],a9=m[9],a10=m[10],a11=m[11];
-  r[0]=a0*c-a8*s; r[1]=a1*c-a9*s; r[2]=a2*c-a10*s; r[3]=a3*c-a11*s;
-  r[8]=a0*s+a8*c; r[9]=a1*s+a9*c; r[10]=a2*s+a10*c; r[11]=a3*s+a11*c;
-  return r;
+  r[0]=a0*c-a8*s;r[1]=a1*c-a9*s;r[2]=a2*c-a10*s;r[3]=a3*c-a11*s;
+  r[8]=a0*s+a8*c;r[9]=a1*s+a9*c;r[10]=a2*s+a10*c;r[11]=a3*s+a11*c; return r;
 }
 
 function mat4Multiply(a, b) {
   const r = new Float32Array(16);
-  for (let i=0; i<4; i++)
-    for (let j=0; j<4; j++) {
-      r[j*4+i] = a[i]*b[j*4] + a[4+i]*b[j*4+1] + a[8+i]*b[j*4+2] + a[12+i]*b[j*4+3];
-    }
+  for(let i=0;i<4;i++) for(let j=0;j<4;j++)
+    r[j*4+i]=a[i]*b[j*4]+a[4+i]*b[j*4+1]+a[8+i]*b[j*4+2]+a[12+i]*b[j*4+3];
   return r;
 }
 
 // ===== MESH HELPERS =====
 function createBuffer(data) {
-  const buf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
-  return buf;
+  const buf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(data),gl.STATIC_DRAW); return buf;
 }
-
 function createIndexBuffer(data) {
-  const buf = gl.createBuffer();
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf);
-  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(data), gl.STATIC_DRAW);
-  return buf;
+  const buf=gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,buf);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(data),gl.STATIC_DRAW); return buf;
 }
 
 function buildBox(w, h, d, r, g, b) {
-  const hw=w/2, hh=h/2, hd=d/2;
-  const verts = [];
-  const idx = [];
-  const boxFaces = [
+  const hw=w/2,hh=h/2,hd=d/2, verts=[], idx=[];
+  const faces=[
     [[hw,hh,hd],[hw,-hh,hd],[-hw,-hh,hd],[-hw,hh,hd],[0,0,1]],
     [[-hw,hh,-hd],[-hw,-hh,-hd],[hw,-hh,-hd],[hw,hh,-hd],[0,0,-1]],
     [[-hw,hh,hd],[-hw,-hh,hd],[-hw,-hh,-hd],[-hw,hh,-hd],[-1,0,0]],
@@ -458,53 +455,37 @@ function buildBox(w, h, d, r, g, b) {
     [[-hw,hh,-hd],[-hw,hh,hd],[hw,hh,hd],[hw,hh,-hd],[0,1,0]],
     [[-hw,-hh,hd],[-hw,-hh,-hd],[hw,-hh,-hd],[hw,-hh,hd],[0,-1,0]],
   ];
-  let vi = 0;
-  for (const f of boxFaces) {
-    for (let i=0; i<4; i++) {
-      verts.push(...f[i], ...f[4], 0, 0, r, g, b);
-    }
-    idx.push(vi,vi+1,vi+2, vi,vi+2,vi+3);
-    vi += 4;
-  }
-  return { verts, idx, vertCount: idx.length };
+  let vi=0;
+  for(const f of faces){for(let i=0;i<4;i++)verts.push(...f[i],...f[4],0,0,r,g,b);
+    idx.push(vi,vi+1,vi+2,vi,vi+2,vi+3);vi+=4;}
+  return{verts,idx,vertCount:idx.length};
 }
 
 function createMesh(data) {
-  return {
-    vBuf: createBuffer(data.verts),
-    iBuf: createIndexBuffer(data.idx),
-    count: data.vertCount
-  };
+  return{vBuf:createBuffer(data.verts),iBuf:createIndexBuffer(data.idx),count:data.vertCount};
 }
 
-// ===== FACE TEXTURE FROM URL (GIF with animation via ImageDecoder) =====
+// ===== FACE TEXTURE (GIF via ImageDecoder) =====
 let faceTexture = gl.createTexture();
 let faceImgLoaded = false;
-let faceAspect = 1; // width / height ratio
+let faceAspect = 1;
 
-// Fallback img element for static display
 const faceImg = document.createElement('img');
 faceImg.crossOrigin = 'anonymous';
 faceImg.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:-1;';
 document.body.appendChild(faceImg);
 
-// GIF frame decoder state
-let gifFrames = [];
-let currentGifFrame = 0;
-let lastGifFrameTime = 0;
-let gifDecoderReady = false;
+let gifFrames = [], currentGifFrame = 0, lastGifFrameTime = 0, gifDecoderReady = false;
 
-// Initialize placeholder texture
 gl.bindTexture(gl.TEXTURE_2D, faceTexture);
-gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 0, 0, 255]));
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([255,0,0,255]));
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
 
 const FACE_IMG_URL = 'https://241829.com/20260207.gif';
 
-// Try to decode GIF frames using ImageDecoder API (Chrome/Edge)
 async function initGifDecoder(url) {
   if (typeof ImageDecoder !== 'undefined') {
     try {
@@ -518,66 +499,46 @@ async function initGifDecoder(url) {
         const vf = result.image;
         if (i === 0) faceAspect = vf.displayWidth / vf.displayHeight;
         const bitmap = await createImageBitmap(vf);
-        const dur = (vf.duration || 100000) / 1000; // microseconds to ms
+        const dur = (vf.duration || 100000) / 1000;
         vf.close();
         gifFrames.push({ bitmap, duration: dur });
       }
       decoder.close();
-      gifDecoderReady = true;
-      faceImgLoaded = true;
+      gifDecoderReady = true; faceImgLoaded = true;
       lastGifFrameTime = performance.now();
       return;
-    } catch(e) {
-      console.warn('ImageDecoder failed, using static fallback:', e);
-    }
+    } catch(e) { console.warn('ImageDecoder failed:', e); }
   }
 }
 
-// Load static fallback via img element
 faceImg.onload = function() {
   faceImgLoaded = true;
-  if (faceImg.naturalWidth > 0 && faceImg.naturalHeight > 0) {
-    faceAspect = faceImg.naturalWidth / faceImg.naturalHeight;
-  }
+  if (faceImg.naturalWidth > 0) faceAspect = faceImg.naturalWidth / faceImg.naturalHeight;
 };
 faceImg.src = FACE_IMG_URL;
-
-// Start GIF decoder (runs in parallel with img load)
 initGifDecoder(FACE_IMG_URL);
 
-// Upload current GIF frame or static image to WebGL texture
 function updateFaceTexture() {
   if (gifDecoderReady && gifFrames.length > 0) {
-    // Animated GIF: cycle through decoded frames
-    const now = performance.now();
-    const frame = gifFrames[currentGifFrame];
+    const now = performance.now(), frame = gifFrames[currentGifFrame];
     if (now - lastGifFrameTime >= frame.duration) {
       currentGifFrame = (currentGifFrame + 1) % gifFrames.length;
       lastGifFrameTime = now;
     }
     gl.bindTexture(gl.TEXTURE_2D, faceTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gifFrames[currentGifFrame].bitmap);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,gifFrames[currentGifFrame].bitmap);
   } else if (faceImgLoaded) {
-    // Static fallback
     gl.bindTexture(gl.TEXTURE_2D, faceTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, faceImg);
-  } else {
-    return;
-  }
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,faceImg);
+  } else return;
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
 }
 
-// Billboard quad: pos(x,y,z) + uv(u,v) = 5 floats per vert
-const quadVerts = new Float32Array([
-  -1,  1, 0,  0, 0,
-   1,  1, 0,  1, 0,
-   1, -1, 0,  1, 1,
-  -1, -1, 0,  0, 1,
-]);
-const quadIdx = new Uint16Array([0,1,2, 0,2,3]);
+const quadVerts = new Float32Array([-1,1,0,0,0, 1,1,0,1,0, 1,-1,0,1,1, -1,-1,0,0,1]);
+const quadIdx = new Uint16Array([0,1,2,0,2,3]);
 const quadVBuf = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, quadVBuf);
 gl.bufferData(gl.ARRAY_BUFFER, quadVerts, gl.STATIC_DRAW);
@@ -585,133 +546,230 @@ const quadIBuf = gl.createBuffer();
 gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, quadIBuf);
 gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, quadIdx, gl.STATIC_DRAW);
 
-// ===== CITY GENERATION =====
-const CITY_SIZE = 100;
-const BLOCK_SIZE = 16;
-const ROAD_WIDTH = 6;
+// ===== REALISTIC SHIBUYA CITY (1 unit = 1 meter) =====
+const CITY_SIZE = 400;    // 800m x 800m city
+const BLOCK_SIZE = 50;    // ~50m city blocks (realistic Tokyo)
+const ROAD_WIDTH = 15;    // ~15m roads (including sidewalks)
+const SAFE_ZONE = 35;     // Scramble crossing open area
 
 function generateCity() {
   buildings = [];
 
-  const neonColors = [
-    [0.15, 0.15, 0.2],
-    [0.12, 0.12, 0.18],
-    [0.2, 0.18, 0.22],
-    [0.1, 0.1, 0.15],
-    [0.18, 0.15, 0.2],
+  // Building colors: dark concrete/glass tones
+  const bldgColors = [
+    [0.14, 0.14, 0.18], [0.11, 0.11, 0.16], [0.18, 0.16, 0.20],
+    [0.09, 0.09, 0.13], [0.16, 0.14, 0.19], [0.12, 0.13, 0.17],
   ];
-
+  // Neon/sign accent colors
   const accentColors = [
-    [1.0, 0.17, 0.48],
-    [0.0, 0.83, 1.0],
-    [1.0, 0.42, 0.21],
-    [0.56, 0.0, 1.0],
-    [0.0, 1.0, 0.5],
-    [1.0, 1.0, 0.0],
+    [1.0, 0.17, 0.48], [0.0, 0.83, 1.0], [1.0, 0.42, 0.21],
+    [0.56, 0.0, 1.0], [0.0, 1.0, 0.5], [1.0, 1.0, 0.0],
+    [1.0, 0.0, 0.0], [0.0, 0.5, 1.0], [1.0, 0.6, 0.8],
+  ];
+  // Sidewalk color
+  const swCol = [0.22, 0.21, 0.23];
+  // Ground floor shop colors (brighter)
+  const shopColors = [
+    [0.25, 0.15, 0.12], [0.15, 0.20, 0.25], [0.25, 0.22, 0.12],
+    [0.20, 0.12, 0.22], [0.12, 0.22, 0.18],
   ];
 
-  const SAFE_ZONE = 18;
   for (let bx = -CITY_SIZE; bx < CITY_SIZE; bx += BLOCK_SIZE) {
     for (let bz = -CITY_SIZE; bz < CITY_SIZE; bz += BLOCK_SIZE) {
-      if (Math.abs(bx + BLOCK_SIZE/2) < SAFE_ZONE && Math.abs(bz + BLOCK_SIZE/2) < SAFE_ZONE) continue;
-      const numBuildings = 2 + Math.floor(Math.random() * 3);
-      for (let i = 0; i < numBuildings; i++) {
-        const w = 3 + Math.random() * 6;
-        const h = 5 + Math.random() * 35;
-        const d = 3 + Math.random() * 6;
-        const ox = bx + ROAD_WIDTH/2 + Math.random() * (BLOCK_SIZE - ROAD_WIDTH - w);
-        const oz = bz + ROAD_WIDTH/2 + Math.random() * (BLOCK_SIZE - ROAD_WIDTH - d);
+      const cx = bx + BLOCK_SIZE / 2, cz = bz + BLOCK_SIZE / 2;
+      if (Math.abs(cx) < SAFE_ZONE && Math.abs(cz) < SAFE_ZONE) continue;
 
-        const col = neonColors[Math.floor(Math.random() * neonColors.length)];
+      // Sidewalks around block (0.15m raised strips)
+      const swInner = ROAD_WIDTH / 2;
+      const swOuter = swInner + 2.5; // 2.5m wide sidewalk
+      // Front sidewalk
+      const sw1 = createMesh(buildBox(BLOCK_SIZE - ROAD_WIDTH + 5, 0.15, 2.5, swCol[0], swCol[1], swCol[2]));
+      buildings.push({ mesh: sw1, x: cx, y: 0.075, z: bz + swInner + 1.25, w: BLOCK_SIZE, h: 0.15, d: 2.5, isSign: true });
+      // Back sidewalk
+      const sw2 = createMesh(buildBox(BLOCK_SIZE - ROAD_WIDTH + 5, 0.15, 2.5, swCol[0], swCol[1], swCol[2]));
+      buildings.push({ mesh: sw2, x: cx, y: 0.075, z: bz + BLOCK_SIZE - swInner - 1.25, w: BLOCK_SIZE, h: 0.15, d: 2.5, isSign: true });
+
+      // Buildings in this block
+      const numBldg = 3 + Math.floor(Math.random() * 4);
+      const buildArea = BLOCK_SIZE - ROAD_WIDTH;
+      for (let i = 0; i < numBldg; i++) {
+        const w = 8 + Math.random() * 18;   // 8-26m wide
+        const d = 8 + Math.random() * 18;   // 8-26m deep
+        // Height distribution: mostly 15-60m, some tall towers up to 180m
+        let h;
+        const hRoll = Math.random();
+        if (hRoll < 0.05) h = 100 + Math.random() * 80;     // 100-180m skyscraper
+        else if (hRoll < 0.2) h = 50 + Math.random() * 50;  // 50-100m tall
+        else h = 15 + Math.random() * 40;                     // 15-55m normal
+
+        const ox = bx + ROAD_WIDTH/2 + 3 + Math.random() * Math.max(1, buildArea - w - 6);
+        const oz = bz + ROAD_WIDTH/2 + 3 + Math.random() * Math.max(1, buildArea - d - 6);
+
+        const col = bldgColors[Math.floor(Math.random() * bldgColors.length)];
         const mesh = createMesh(buildBox(w, h, d, col[0], col[1], col[2]));
-
         buildings.push({
           mesh, x: ox, y: h/2, z: oz, w, h, d,
-          hasNeon: Math.random() > 0.4,
+          hasNeon: Math.random() > 0.3,
           neonColor: accentColors[Math.floor(Math.random() * accentColors.length)],
         });
 
-        if (Math.random() > 0.5) {
-          const nc = accentColors[Math.floor(Math.random() * accentColors.length)];
-          const signW = w * 0.6;
-          const signH = 1.5 + Math.random() * 2;
-          const signY = h * 0.3 + Math.random() * h * 0.5;
-          const signMesh = createMesh(buildBox(signW, signH, 0.3, nc[0], nc[1], nc[2]));
+        // Ground floor shop facade (4m tall, slightly wider, brighter)
+        if (Math.random() > 0.3) {
+          const sc = shopColors[Math.floor(Math.random() * shopColors.length)];
+          const shopH = 4;
+          const shopMesh = createMesh(buildBox(w + 0.4, shopH, d + 0.4, sc[0], sc[1], sc[2]));
+          buildings.push({ mesh: shopMesh, x: ox, y: shopH/2, z: oz, w: w+0.4, h: shopH, d: d+0.4, isSign: true, emissive: 0.15 });
+        }
 
+        // Awning/canopy over shop entrance (random side)
+        if (Math.random() > 0.5) {
+          const ac = accentColors[Math.floor(Math.random() * accentColors.length)];
+          const awnW = w * 0.5 + Math.random() * w * 0.3;
+          const awnMesh = createMesh(buildBox(awnW, 0.15, 2, ac[0]*0.6, ac[1]*0.6, ac[2]*0.6));
+          buildings.push({ mesh: awnMesh, x: ox, y: 3.5, z: oz + d/2 + 1, w: awnW, h: 0.15, d: 2, isSign: true, emissive: 0.3 });
+        }
+
+        // Neon signs on building faces (multiple per building)
+        const numSigns = Math.floor(Math.random() * 3);
+        for (let si = 0; si < numSigns; si++) {
+          const nc = accentColors[Math.floor(Math.random() * accentColors.length)];
+          const signW = 2 + Math.random() * (w * 0.5);
+          const signH = 1 + Math.random() * 3;
+          const signY = 5 + Math.random() * Math.min(h * 0.6, 40);
+          const side = Math.random() > 0.5 ? 1 : -1;
+          const signMesh = createMesh(buildBox(signW, signH, 0.3, nc[0], nc[1], nc[2]));
           buildings.push({
-            mesh: signMesh, x: ox, y: signY, z: oz + d/2 + 0.2,
-            w: signW, h: signH, d: 0.3, isSign: true, emissive: 0.8,
+            mesh: signMesh, x: ox + (Math.random()-0.5)*w*0.3, y: signY,
+            z: oz + side * (d/2 + 0.2),
+            w: signW, h: signH, d: 0.3, isSign: true, emissive: 0.9,
+          });
+        }
+
+        // Vertical neon strip
+        if (Math.random() > 0.6) {
+          const nc = accentColors[Math.floor(Math.random() * accentColors.length)];
+          const stripH = 8 + Math.random() * 15;
+          const stripMesh = createMesh(buildBox(0.8, stripH, 0.2, nc[0], nc[1], nc[2]));
+          buildings.push({
+            mesh: stripMesh, x: ox + w/2 + 0.15, y: 5 + stripH/2, z: oz,
+            w: 0.8, h: stripH, d: 0.2, isSign: true, emissive: 0.8,
           });
         }
       }
-    }
-  }
 
-  const bigCol = [0.25, 0.2, 0.28];
-  const bigMesh = createMesh(buildBox(18, 45, 18, bigCol[0], bigCol[1], bigCol[2]));
-  buildings.push({
-    mesh: bigMesh, x: 20, y: 22.5, z: 20, w: 18, h: 45, d: 18,
-    hasNeon: true, neonColor: [1.0, 0.17, 0.48],
-  });
-
-  for (let x = -CITY_SIZE; x < CITY_SIZE; x += BLOCK_SIZE) {
-    for (let z = -CITY_SIZE; z < CITY_SIZE; z += BLOCK_SIZE) {
-      if (Math.abs(x) < SAFE_ZONE && Math.abs(z) < SAFE_ZONE) continue;
-      if (Math.random() > 0.5) {
-        const poleMesh = createMesh(buildBox(0.15, 6, 0.15, 0.3, 0.3, 0.3));
-        buildings.push({ mesh: poleMesh, x: x+1, y: 3, z: z+1, w: 0.15, h: 6, d: 0.15 });
-        const lightMesh = createMesh(buildBox(0.5, 0.5, 0.5, 1.0, 0.95, 0.8));
-        buildings.push({ mesh: lightMesh, x: x+1, y: 6.2, z: z+1, w: 0.5, h: 0.5, d: 0.5, isSign: true, emissive: 1.0 });
+      // Street lamps every ~25m along roads
+      for (let lx = bx + 2; lx < bx + BLOCK_SIZE; lx += 20 + Math.random() * 10) {
+        const poleMesh = createMesh(buildBox(0.15, 8, 0.15, 0.3, 0.3, 0.3));
+        buildings.push({ mesh: poleMesh, x: lx, y: 4, z: bz + 2, w: 0.15, h: 8, d: 0.15 });
+        const lightMesh = createMesh(buildBox(1.2, 0.4, 0.4, 1.0, 0.95, 0.8));
+        buildings.push({ mesh: lightMesh, x: lx, y: 8.3, z: bz + 2, w: 1.2, h: 0.4, d: 0.4, isSign: true, emissive: 1.0 });
       }
     }
   }
+
+  // === SHIBUYA LANDMARKS ===
+  // 109 building (iconic cylinder-ish, ~60m)
+  const b109 = createMesh(buildBox(25, 60, 25, 0.22, 0.18, 0.24));
+  buildings.push({ mesh: b109, x: -40, y: 30, z: -50, w: 25, h: 60, d: 25 });
+  const sign109 = createMesh(buildBox(12, 8, 0.5, 1.0, 0.17, 0.48));
+  buildings.push({ mesh: sign109, x: -40, y: 55, z: -37, w: 12, h: 8, d: 0.5, isSign: true, emissive: 1.0 });
+
+  // Scramble Square tower (~230m)
+  const scrambleSq = createMesh(buildBox(35, 200, 30, 0.16, 0.16, 0.20));
+  buildings.push({ mesh: scrambleSq, x: 50, y: 100, z: -60, w: 35, h: 200, d: 30 });
+
+  // Hikarie (~183m)
+  const hikarie = createMesh(buildBox(28, 160, 35, 0.13, 0.14, 0.19));
+  buildings.push({ mesh: hikarie, x: 80, y: 80, z: 40, w: 28, h: 160, d: 35 });
+
+  // Train overpass (Yamanote line elevated track)
+  for (let tx = -200; tx < 200; tx += 8) {
+    // Support pillars
+    const pillar = createMesh(buildBox(1.5, 7, 1.5, 0.25, 0.25, 0.27));
+    buildings.push({ mesh: pillar, x: tx, y: 3.5, z: 55, w: 1.5, h: 7, d: 1.5 });
+    // Track deck
+    const deck = createMesh(buildBox(8, 1, 12, 0.2, 0.2, 0.22));
+    buildings.push({ mesh: deck, x: tx, y: 7.5, z: 55, w: 8, h: 1, d: 12, isSign: true });
+  }
+
+  // Scramble crossing road markings at origin (big white stripes)
+  // Already handled in buildGround
 }
 
-// ===== GROUND =====
+// ===== GROUND (with Shibuya Scramble crossing) =====
 function buildGround() {
   const s = CITY_SIZE * 2;
-  const verts = [];
-  const idx = [];
-  verts.push(-s,0,-s, 0,1,0, 0,0, 0.08,0.08,0.1);
-  verts.push( s,0,-s, 0,1,0, 1,0, 0.08,0.08,0.1);
-  verts.push( s,0, s, 0,1,0, 1,1, 0.08,0.08,0.1);
-  verts.push(-s,0, s, 0,1,0, 0,1, 0.08,0.08,0.1);
+  const verts = [], idx = [];
+  // Main dark asphalt ground
+  verts.push(-s,0,-s, 0,1,0, 0,0, 0.06,0.06,0.08);
+  verts.push( s,0,-s, 0,1,0, 1,0, 0.06,0.06,0.08);
+  verts.push( s,0, s, 0,1,0, 1,1, 0.06,0.06,0.08);
+  verts.push(-s,0, s, 0,1,0, 0,1, 0.06,0.06,0.08);
   idx.push(0,1,2, 0,2,3);
-
   let vi = 4;
-  for (let i = -5; i <= 5; i++) {
-    const cx = i * 1.2;
-    verts.push(cx-0.4,0.01,-6, 0,1,0, 0,0, 0.9,0.9,0.9);
-    verts.push(cx+0.4,0.01,-6, 0,1,0, 0,0, 0.9,0.9,0.9);
-    verts.push(cx+0.4,0.01, 6, 0,1,0, 0,0, 0.9,0.9,0.9);
-    verts.push(cx-0.4,0.01, 6, 0,1,0, 0,0, 0.9,0.9,0.9);
-    idx.push(vi,vi+1,vi+2, vi,vi+2,vi+3);
-    vi += 4;
+
+  // Scramble crossing: diagonal and straight white stripes
+  const stripeW = 0.6, crossSize = 25;
+  // Horizontal stripes (north-south crossing)
+  for (let i = -8; i <= 8; i++) {
+    const cz = i * 1.5;
+    verts.push(-crossSize,0.01,cz-stripeW, 0,1,0, 0,0, 0.85,0.85,0.85);
+    verts.push( crossSize,0.01,cz-stripeW, 0,1,0, 0,0, 0.85,0.85,0.85);
+    verts.push( crossSize,0.01,cz+stripeW, 0,1,0, 0,0, 0.85,0.85,0.85);
+    verts.push(-crossSize,0.01,cz+stripeW, 0,1,0, 0,0, 0.85,0.85,0.85);
+    idx.push(vi,vi+1,vi+2,vi,vi+2,vi+3); vi+=4;
   }
-  for (let i = -5; i <= 5; i++) {
-    const cz = i * 1.2;
-    verts.push(-6,0.01,cz-0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
-    verts.push( 6,0.01,cz-0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
-    verts.push( 6,0.01,cz+0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
-    verts.push(-6,0.01,cz+0.4, 0,1,0, 0,0, 0.9,0.9,0.9);
-    idx.push(vi,vi+1,vi+2, vi,vi+2,vi+3);
-    vi += 4;
+  // Vertical stripes (east-west crossing)
+  for (let i = -8; i <= 8; i++) {
+    const cx = i * 1.5;
+    verts.push(cx-stripeW,0.01,-crossSize, 0,1,0, 0,0, 0.85,0.85,0.85);
+    verts.push(cx+stripeW,0.01,-crossSize, 0,1,0, 0,0, 0.85,0.85,0.85);
+    verts.push(cx+stripeW,0.01, crossSize, 0,1,0, 0,0, 0.85,0.85,0.85);
+    verts.push(cx-stripeW,0.01, crossSize, 0,1,0, 0,0, 0.85,0.85,0.85);
+    idx.push(vi,vi+1,vi+2,vi,vi+2,vi+3); vi+=4;
   }
+  // Diagonal stripes (famous X-crossing)
+  for (let i = -12; i <= 12; i++) {
+    const off = i * 2.2;
+    // Top-left to bottom-right diagonal
+    const x1=-crossSize+off, z1=-crossSize, x2=-crossSize+off+stripeW*1.4, z2=-crossSize;
+    const x3=crossSize+off+stripeW*1.4, z3=crossSize, x4=crossSize+off, z4=crossSize;
+    if(Math.abs(off)<crossSize*2){
+      verts.push(x1,0.012,z1, 0,1,0, 0,0, 0.8,0.8,0.8);
+      verts.push(x2,0.012,z2, 0,1,0, 0,0, 0.8,0.8,0.8);
+      verts.push(x3,0.012,z3, 0,1,0, 0,0, 0.8,0.8,0.8);
+      verts.push(x4,0.012,z4, 0,1,0, 0,0, 0.8,0.8,0.8);
+      idx.push(vi,vi+1,vi+2,vi,vi+2,vi+3); vi+=4;
+    }
+  }
+
+  // Road lane markings along major roads (dashed center lines)
+  for (let rx = -CITY_SIZE; rx < CITY_SIZE; rx += BLOCK_SIZE) {
+    for (let seg = rx + 5; seg < rx + BLOCK_SIZE - 5; seg += 6) {
+      // Center line dash (along Z road)
+      verts.push(rx+ROAD_WIDTH/2-0.1, 0.01, seg, 0,1,0, 0,0, 0.7,0.7,0.3);
+      verts.push(rx+ROAD_WIDTH/2+0.1, 0.01, seg, 0,1,0, 0,0, 0.7,0.7,0.3);
+      verts.push(rx+ROAD_WIDTH/2+0.1, 0.01, seg+3, 0,1,0, 0,0, 0.7,0.7,0.3);
+      verts.push(rx+ROAD_WIDTH/2-0.1, 0.01, seg+3, 0,1,0, 0,0, 0.7,0.7,0.3);
+      idx.push(vi,vi+1,vi+2,vi,vi+2,vi+3); vi+=4;
+    }
+  }
+
   return createMesh({ verts, idx, vertCount: idx.length });
 }
 
 let groundMesh;
 
-// ===== FACE ENTITY =====
+// ===== FACE ENTITY (large enemies) =====
 function spawnFace() {
   const angle = Math.random() * Math.PI * 2;
-  const dist = 40 + Math.random() * 30;
-  const scale = 1.8 + Math.random() * 0.8; // Larger NEXTBOTS
+  const dist = 80 + Math.random() * 60;  // spawn 80-140m away
+  const scale = 3.0 + Math.random() * 1.5; // 3.0-4.5m tall (towering over player)
   return {
     x: playerPos.x + Math.cos(angle) * dist,
-    y: scale, // Bottom touches ground (quad center at y=scale)
+    y: scale,
     z: playerPos.z + Math.sin(angle) * dist,
-    speed: 0.06 + Math.random() * 0.03 + score * 0.0002,
+    speed: 0.08 + Math.random() * 0.04 + score * 0.0002,
     scale: scale,
   };
 }
@@ -720,11 +778,8 @@ function spawnFace() {
 function checkBuildingCollision(nx, nz) {
   for (const b of buildings) {
     if (b.isSign) continue;
-    const hw = b.w/2 + 0.5;
-    const hd = b.d/2 + 0.5;
-    if (nx > b.x - hw && nx < b.x + hw && nz > b.z - hd && nz < b.z + hd) {
-      return true;
-    }
+    const hw = b.w/2 + 0.4, hd = b.d/2 + 0.4;
+    if (nx > b.x-hw && nx < b.x+hw && nz > b.z-hd && nz < b.z+hd) return true;
   }
   return false;
 }
@@ -738,122 +793,84 @@ function getViewMatrix() {
   return v;
 }
 
-// ===== BUILDING RENDERING =====
+// ===== RENDERING =====
 function drawMesh(mesh, modelMatrix, viewMatrix, projMatrix, emissive) {
   gl.bindBuffer(gl.ARRAY_BUFFER, mesh.vBuf);
   const stride = 44;
-  gl.vertexAttribPointer(locs.aPosition, 3, gl.FLOAT, false, stride, 0);
-  gl.vertexAttribPointer(locs.aNormal, 3, gl.FLOAT, false, stride, 12);
-  gl.vertexAttribPointer(locs.aTexCoord, 2, gl.FLOAT, false, stride, 24);
-  gl.vertexAttribPointer(locs.aColor, 3, gl.FLOAT, false, stride, 32);
+  gl.vertexAttribPointer(locs.aPosition,3,gl.FLOAT,false,stride,0);
+  gl.vertexAttribPointer(locs.aNormal,3,gl.FLOAT,false,stride,12);
+  gl.vertexAttribPointer(locs.aTexCoord,2,gl.FLOAT,false,stride,24);
+  gl.vertexAttribPointer(locs.aColor,3,gl.FLOAT,false,stride,32);
   gl.enableVertexAttribArray(locs.aPosition);
   gl.enableVertexAttribArray(locs.aNormal);
   gl.enableVertexAttribArray(locs.aTexCoord);
   gl.enableVertexAttribArray(locs.aColor);
-
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.iBuf);
-
-  const mvMatrix = mat4Multiply(viewMatrix, modelMatrix);
-  gl.uniformMatrix4fv(locs.uModelView, false, mvMatrix);
-  gl.uniformMatrix4fv(locs.uProjection, false, projMatrix);
-  gl.uniformMatrix4fv(locs.uModel, false, modelMatrix);
-  gl.uniform1f(locs.uEmissive, emissive || 0);
-
+  const mv = mat4Multiply(viewMatrix, modelMatrix);
+  gl.uniformMatrix4fv(locs.uModelView,false,mv);
+  gl.uniformMatrix4fv(locs.uProjection,false,projMatrix);
+  gl.uniformMatrix4fv(locs.uModel,false,modelMatrix);
+  gl.uniform1f(locs.uEmissive, emissive||0);
   gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
 }
 
-// ===== FACE BILLBOARD RENDERING =====
 function drawFaceBillboard(f, viewMatrix, projMatrix) {
   gl.useProgram(bbProgram);
-
-  // Billboard: translate, face player, correct aspect ratio
   let model = mat4Identity();
   model = mat4Translate(model, f.x, f.y, f.z);
   const angle = Math.atan2(playerPos.x - f.x, playerPos.z - f.z);
   model = mat4RotateY(model, angle);
   const s = f.scale;
-  model = mat4Scale(model, s * faceAspect, s, s); // Preserve image aspect ratio
-
+  model = mat4Scale(model, s * faceAspect, s, s);
   const mvp = mat4Multiply(projMatrix, mat4Multiply(viewMatrix, model));
-
-  // Fog based on distance
-  const dx = f.x - playerPos.x, dz = f.z - playerPos.z;
-  const dist = Math.sqrt(dx*dx + dz*dz);
-  const fog = Math.max(0, Math.min(1, 1 - dist / 120));
-
-  gl.uniformMatrix4fv(bbLocs.uBBMVP, false, mvp);
+  const dx = f.x-playerPos.x, dz = f.z-playerPos.z;
+  const dist = Math.sqrt(dx*dx+dz*dz);
+  const fog = Math.max(0, Math.min(1, 1 - dist / 350));
+  gl.uniformMatrix4fv(bbLocs.uBBMVP,false,mvp);
   gl.uniform1f(bbLocs.uBBFog, fog);
   gl.uniform3f(bbLocs.uBBFogCol, 0.02, 0.01, 0.05);
-
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, faceTexture);
   gl.uniform1i(bbLocs.uBBTex, 0);
-
   gl.bindBuffer(gl.ARRAY_BUFFER, quadVBuf);
-  gl.vertexAttribPointer(bbLocs.aBBPos, 3, gl.FLOAT, false, 20, 0);
-  gl.vertexAttribPointer(bbLocs.aBBUV, 2, gl.FLOAT, false, 20, 12);
+  gl.vertexAttribPointer(bbLocs.aBBPos,3,gl.FLOAT,false,20,0);
+  gl.vertexAttribPointer(bbLocs.aBBUV,2,gl.FLOAT,false,20,12);
   gl.enableVertexAttribArray(bbLocs.aBBPos);
   gl.enableVertexAttribArray(bbLocs.aBBUV);
-
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, quadIBuf);
   gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
 }
 
 // ===== MINIMAP =====
 function drawMinimap() {
-  const ctx = minimapCtx;
-  const w = 180, h = 180;
+  const ctx = minimapCtx, w = 180, h = 180;
   ctx.clearRect(0, 0, w, h);
-
   ctx.save();
-  ctx.beginPath();
-  ctx.arc(w/2, h/2, w/2-2, 0, Math.PI*2);
-  ctx.clip();
-
-  ctx.fillStyle = 'rgba(10,10,20,0.9)';
-  ctx.fillRect(0, 0, w, h);
-
-  const scale = 1.5;
+  ctx.beginPath(); ctx.arc(w/2,h/2,w/2-2,0,Math.PI*2); ctx.clip();
+  ctx.fillStyle = 'rgba(10,10,20,0.9)'; ctx.fillRect(0,0,w,h);
+  const scale = 0.5; // smaller scale for bigger city
   const cx = w/2, cy = h/2;
-
   ctx.fillStyle = 'rgba(60,50,80,0.7)';
   for (const b of buildings) {
     if (b.isSign) continue;
-    const dx = (b.x - playerPos.x) * scale;
-    const dz = (b.z - playerPos.z) * scale;
-    if (Math.abs(dx) > 90 || Math.abs(dz) > 90) continue;
-    ctx.fillRect(cx + dx - b.w*scale/2, cy + dz - b.d*scale/2, b.w*scale, b.d*scale);
+    const dx=(b.x-playerPos.x)*scale, dz=(b.z-playerPos.z)*scale;
+    if (Math.abs(dx)>90||Math.abs(dz)>90) continue;
+    ctx.fillRect(cx+dx-b.w*scale/2,cy+dz-b.d*scale/2,Math.max(1,b.w*scale),Math.max(1,b.d*scale));
   }
-
   for (const f of faces) {
-    const dx = (f.x - playerPos.x) * scale;
-    const dz = (f.z - playerPos.z) * scale;
-    if (Math.abs(dx) > 90 || Math.abs(dz) > 90) continue;
-    ctx.beginPath();
-    ctx.arc(cx + dx, cy + dz, 4, 0, Math.PI*2);
-    ctx.fillStyle = '#ff0044';
-    ctx.fill();
+    const dx=(f.x-playerPos.x)*scale,dz=(f.z-playerPos.z)*scale;
+    if (Math.abs(dx)>90||Math.abs(dz)>90) continue;
+    ctx.beginPath(); ctx.arc(cx+dx,cy+dz,4,0,Math.PI*2);
+    ctx.fillStyle='#ff0044'; ctx.fill();
   }
-
-  ctx.beginPath();
-  ctx.arc(cx, cy, 3, 0, Math.PI*2);
-  ctx.fillStyle = '#00ff88';
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.moveTo(cx, cy);
-  ctx.lineTo(cx + Math.sin(playerRot.y)*12, cy - Math.cos(playerRot.y)*12);
-  ctx.strokeStyle = '#00ff88';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
+  ctx.beginPath(); ctx.arc(cx,cy,3,0,Math.PI*2);
+  ctx.fillStyle='#00ff88'; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(cx,cy);
+  ctx.lineTo(cx+Math.sin(playerRot.y)*12,cy-Math.cos(playerRot.y)*12);
+  ctx.strokeStyle='#00ff88'; ctx.lineWidth=2; ctx.stroke();
   ctx.restore();
-
-  ctx.beginPath();
-  ctx.arc(w/2, h/2, w/2-2, 0, Math.PI*2);
-  ctx.strokeStyle = '#ff2d7b';
-  ctx.lineWidth = 2;
-  ctx.stroke();
+  ctx.beginPath(); ctx.arc(w/2,h/2,w/2-2,0,Math.PI*2);
+  ctx.strokeStyle='#ff2d7b'; ctx.lineWidth=2; ctx.stroke();
 }
 
 // ===== GAME LOOP =====
@@ -863,125 +880,100 @@ function update(dt) {
   survivalTime += dt;
   score = Math.floor(survivalTime * 10);
 
-  // When NOT in pointer lock, apply continuous rotation based on mouse offset from center
+  // Virtual joystick when no pointer lock
   if (!pointerLocked) {
-    const cx = window.innerWidth / 2;
-    const cy = window.innerHeight / 2;
-    const dx = (mouseScreenX - cx) / cx; // -1 to 1
-    const dy = (mouseScreenY - cy) / cy; // -1 to 1
-    // Apply dead zone in center (10% of screen)
-    const deadZone = 0.1;
-    const turnSpeedY = 0.06;
-    const turnSpeedX = 0.03;
-    if (Math.abs(dx) > deadZone) {
-      const sign = dx > 0 ? 1 : -1;
-      const magnitude = (Math.abs(dx) - deadZone) / (1 - deadZone);
-      playerRot.y -= sign * magnitude * turnSpeedY;
-    }
-    if (Math.abs(dy) > deadZone) {
-      const sign = dy > 0 ? 1 : -1;
-      const magnitude = (Math.abs(dy) - deadZone) / (1 - deadZone);
-      playerRot.x -= sign * magnitude * turnSpeedX;
-    }
+    const cx=window.innerWidth/2, cy=window.innerHeight/2;
+    const dx=(mouseScreenX-cx)/cx, dy=(mouseScreenY-cy)/cy;
+    const deadZone=0.1, turnSpeedY=0.06, turnSpeedX=0.03;
+    if(Math.abs(dx)>deadZone){const s=dx>0?1:-1,m=(Math.abs(dx)-deadZone)/(1-deadZone);playerRot.y-=s*m*turnSpeedY;}
+    if(Math.abs(dy)>deadZone){const s=dy>0?1:-1,m=(Math.abs(dy)-deadZone)/(1-deadZone);playerRot.x-=s*m*turnSpeedX;}
     playerRot.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, playerRot.x));
   }
 
-  // Hop speed bonus decays slowly
-  hopSpeedBonus = Math.max(0, hopSpeedBonus - dt * 0.02);
-  const speed = (isSprinting ? sprintSpeed : playerSpeed) + hopSpeedBonus;
+  // Check if player is pressing movement keys
+  isMoving = !!(keys['w']||keys['arrowup']||keys['s']||keys['arrowdown']||keys['a']||keys['arrowleft']||keys['d']||keys['arrowright']);
+
+  // Bhop speed decay when on ground and not bhopping
+  if (!isInAir && !spaceHeld) {
+    bhopSpeed = Math.max(0, bhopSpeed - BHOP_DECAY * dt);
+  }
+
+  const speed = (isSprinting ? sprintSpeed : playerSpeed) + bhopSpeed;
 
   let moveX = 0, moveZ = 0;
-  if (keys['w'] || keys['arrowup'])    { moveX -= Math.sin(playerRot.y); moveZ -= Math.cos(playerRot.y); }
-  if (keys['s'] || keys['arrowdown'])  { moveX += Math.sin(playerRot.y); moveZ += Math.cos(playerRot.y); }
-  if (keys['a'] || keys['arrowleft'])  { moveX -= Math.cos(playerRot.y); moveZ += Math.sin(playerRot.y); }
-  if (keys['d'] || keys['arrowright']) { moveX += Math.cos(playerRot.y); moveZ -= Math.sin(playerRot.y); }
+  if (keys['w']||keys['arrowup'])    { moveX -= Math.sin(playerRot.y); moveZ -= Math.cos(playerRot.y); }
+  if (keys['s']||keys['arrowdown'])  { moveX += Math.sin(playerRot.y); moveZ += Math.cos(playerRot.y); }
+  if (keys['a']||keys['arrowleft'])  { moveX -= Math.cos(playerRot.y); moveZ += Math.sin(playerRot.y); }
+  if (keys['d']||keys['arrowright']) { moveX += Math.cos(playerRot.y); moveZ -= Math.sin(playerRot.y); }
 
   if (moveX !== 0 || moveZ !== 0) {
     const len = Math.sqrt(moveX*moveX + moveZ*moveZ);
     moveX = moveX/len * speed;
     moveZ = moveZ/len * speed;
-    const nx = playerPos.x + moveX;
-    const nz = playerPos.z + moveZ;
+    const nx = playerPos.x + moveX, nz = playerPos.z + moveZ;
     if (!checkBuildingCollision(nx, playerPos.z)) playerPos.x = nx;
     if (!checkBuildingCollision(playerPos.x, nz)) playerPos.z = nz;
   }
 
-  // Hop physics
-  if (isHopping) {
-    hopVelocityY -= GRAVITY;
-    playerPos.y += hopVelocityY;
-    if (playerPos.y <= 1.7) {
-      playerPos.y = 1.7;
-      isHopping = false;
-      hopVelocityY = 0;
-      lastLandTime = performance.now();
+  // Bhop physics
+  if (isInAir) {
+    verticalVel -= BHOP_GRAVITY;
+    playerPos.y += verticalVel;
+    if (playerPos.y <= GROUND_Y) {
+      playerPos.y = GROUND_Y;
+      isInAir = false;
+      verticalVel = 0;
+      // Successful bhop landing: if moving and space held, gain speed
+      if (isMoving && spaceHeld) {
+        bhopSpeed = Math.min(bhopSpeed + BHOP_ACCEL, BHOP_MAX);
+        // Auto-jump if space still held (bhop spam)
+        isInAir = true;
+        verticalVel = BHOP_JUMP_FORCE;
+      }
     }
-  } else if (moveX !== 0 || moveZ !== 0) {
-    playerPos.y = 1.7 + Math.sin(survivalTime * 10) * 0.05;
+  } else if (isMoving && !isInAir) {
+    // Subtle walking bob
+    playerPos.y = GROUND_Y + Math.sin(survivalTime * 10) * 0.04;
   }
 
-  const targetFaces = Math.min(1 + Math.floor(survivalTime / 15), 8);
-  while (faces.length < targetFaces) {
-    faces.push(spawnFace());
-  }
+  // Spawn more faces over time
+  const targetFaces = Math.min(1 + Math.floor(survivalTime / 12), 10);
+  while (faces.length < targetFaces) faces.push(spawnFace());
 
   let closestDist = Infinity;
   for (const f of faces) {
-    const dx = playerPos.x - f.x;
-    const dz = playerPos.z - f.z;
-    const dist = Math.sqrt(dx*dx + dz*dz);
-
+    const dx=playerPos.x-f.x, dz=playerPos.z-f.z;
+    const dist = Math.sqrt(dx*dx+dz*dz);
     if (dist > 0.1) {
-      const dirX = dx / dist;
-      const dirZ = dz / dist;
-      const speedMult = 1 + Math.max(0, (30 - dist)) * 0.05;
-      const nx = f.x + dirX * f.speed * speedMult;
-      const nz = f.z + dirZ * f.speed * speedMult;
-
-      if (!checkBuildingCollision(nx, nz)) {
-        f.x = nx;
-        f.z = nz;
-      } else {
-        f.x += dirZ * f.speed * 0.5;
-        f.z -= dirX * f.speed * 0.5;
-      }
+      const dirX=dx/dist, dirZ=dz/dist;
+      const speedMult = 1 + Math.max(0,(40-dist)) * 0.04;
+      const nx=f.x+dirX*f.speed*speedMult, nz=f.z+dirZ*f.speed*speedMult;
+      if (!checkBuildingCollision(nx, nz)) { f.x=nx; f.z=nz; }
+      else { f.x+=dirZ*f.speed*0.5; f.z-=dirX*f.speed*0.5; }
     }
-
     if (dist < closestDist) closestDist = dist;
-
-    if (dist < 2.5) {
-      gameOver();
-      return;
-    }
+    if (dist < 3.0) { gameOver(); return; }
   }
 
-  // Update music volume based on proximity to nearest face
+  // Proximity music
   if (bgMusic && musicReady) {
-    const maxDist = 50;
-    const vol = Math.max(0, Math.min(1, 1 - closestDist / maxDist));
-    bgMusic.volume = vol;
+    bgMusic.volume = Math.max(0, Math.min(1, 1 - closestDist / 60));
   }
 
   const warning = document.getElementById('warning');
-  if (closestDist < 15) {
-    warning.style.opacity = Math.max(0, 1 - closestDist / 15);
-    warning.textContent = closestDist < 8 ? 'DANGER!!!' : 'WARNING!';
-  } else {
-    warning.style.opacity = 0;
-  }
+  if (closestDist < 20) {
+    warning.style.opacity = Math.max(0, 1 - closestDist / 20);
+    warning.textContent = closestDist < 10 ? 'DANGER!!!' : 'WARNING!';
+  } else { warning.style.opacity = 0; }
 
-  // Decay hop chain if too long since last landing
-  if (!isHopping && hopChain > 0 && performance.now() - lastLandTime > HOP_WINDOW * 2) {
-    hopChain = 0;
-    hopSpeedBonus = 0;
-  }
-
+  // UI updates
   document.getElementById('score-val').textContent = score;
   document.getElementById('time-val').textContent = Math.floor(survivalTime) + 's';
   document.getElementById('face-count').textContent = faces.length;
-  const hopEl = document.getElementById('hop-chain');
-  hopEl.textContent = hopChain > 0 ? 'x' + hopChain : '0';
-  hopEl.style.color = hopChain >= 5 ? '#00ff88' : hopChain >= 3 ? '#ffff00' : '#ff2d7b';
+  const speedPct = Math.min(100, (bhopSpeed / BHOP_MAX) * 100);
+  document.getElementById('speed-bar').style.width = speedPct + '%';
+  const spdKmh = Math.round(speed * 60 * 3.6); // approximate km/h
+  document.getElementById('speed-val').textContent = spdKmh + ' km/h';
 }
 
 function render() {
@@ -990,46 +982,39 @@ function render() {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   gl.enable(gl.DEPTH_TEST);
   gl.enable(gl.CULL_FACE);
-  gl.frontFace(gl.CW); // Fix: match box winding order
+  gl.frontFace(gl.CW);
 
-  const proj = mat4Perspective(Math.PI / 3, canvas.width / canvas.height, 0.1, 200);
+  const proj = mat4Perspective(Math.PI / 3, canvas.width / canvas.height, 0.1, 600);
   const view = getViewMatrix();
 
-  // --- Draw buildings & ground ---
   gl.useProgram(program);
   gl.uniform3f(locs.uLightDir, 0.3, 1.0, 0.5);
   gl.uniform3f(locs.uAmbient, 0.15, 0.12, 0.2);
   gl.uniform3f(locs.uFogColor, 0.02, 0.01, 0.05);
 
   drawMesh(groundMesh, mat4Identity(), view, proj, 0);
-
   for (const b of buildings) {
+    // Frustum cull: skip far buildings
+    const dx=b.x-playerPos.x, dz=b.z-playerPos.z;
+    if (dx*dx+dz*dz > 350*350) continue;
     const model = mat4Translate(mat4Identity(), b.x, b.y, b.z);
     drawMesh(b.mesh, model, view, proj, b.emissive || 0);
   }
 
-  // Disable attribs from building shader before switching
   gl.disableVertexAttribArray(locs.aPosition);
   gl.disableVertexAttribArray(locs.aNormal);
   gl.disableVertexAttribArray(locs.aTexCoord);
   gl.disableVertexAttribArray(locs.aColor);
 
-  // --- Draw face billboards ---
   gl.disable(gl.CULL_FACE);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-  // Update GIF texture once per frame (captures current animation frame)
   updateFaceTexture();
-
-  for (const f of faces) {
-    drawFaceBillboard(f, view, proj);
-  }
+  for (const f of faces) drawFaceBillboard(f, view, proj);
 
   gl.disable(gl.BLEND);
   gl.enable(gl.CULL_FACE);
-
-  // Disable billboard attribs
   gl.disableVertexAttribArray(bbLocs.aBBPos);
   gl.disableVertexAttribArray(bbLocs.aBBUV);
 
@@ -1039,12 +1024,7 @@ function render() {
 function gameLoop(time) {
   const dt = Math.min((time - lastTime) / 1000, 0.05);
   lastTime = time;
-
-  if (gameRunning) {
-    update(dt);
-    render();
-  }
-
+  if (gameRunning) { update(dt); render(); }
   requestAnimationFrame(gameLoop);
 }
 
@@ -1052,27 +1032,15 @@ function gameLoop(time) {
 function startGame() {
   document.getElementById('start-screen').style.display = 'none';
   document.getElementById('crosshair').style.display = 'block';
-
   playerPos = { x: 0, y: 1.7, z: 0 };
   playerRot = { x: 0, y: 0 };
-  score = 0;
-  survivalTime = 0;
-  isHopping = false;
-  hopVelocityY = 0;
-  hopChain = 0;
-  hopSpeedBonus = 0;
-  lastLandTime = 0;
+  score = 0; survivalTime = 0;
+  isInAir = false; verticalVel = 0; bhopSpeed = 0; spaceHeld = false;
   faces = [spawnFace()];
-
   generateCity();
   groundMesh = buildGround();
-
-  // Init proximity music
   initMusic();
-
-  // Request pointer lock for FPS controls
   canvas.requestPointerLock();
-
   gameRunning = true;
   lastTime = performance.now();
 }
@@ -1091,97 +1059,69 @@ function restartGame() {
   startGame();
 }
 
-// ===== POINTER LOCK TRACKING =====
+// ===== INPUT =====
 document.addEventListener('pointerlockchange', () => {
   pointerLocked = document.pointerLockElement === canvas;
   document.body.style.cursor = pointerLocked ? 'none' : 'crosshair';
 });
 
-// ===== INPUT =====
 document.addEventListener('keydown', (e) => {
   keys[e.key.toLowerCase()] = true;
   if (e.key === 'Shift') isSprinting = true;
-  if (e.key === ' ' && gameRunning && !isHopping) {
+  if (e.key === ' ') {
     e.preventDefault();
-    isHopping = true;
-    // Check if this is a well-timed chain hop
-    const now = performance.now();
-    if (now - lastLandTime < HOP_WINDOW && hopChain > 0) {
-      hopChain = Math.min(hopChain + 1, MAX_HOP_CHAIN);
-    } else if (now - lastLandTime < HOP_WINDOW) {
-      hopChain = 2; // first chain
-    } else {
-      hopChain = 1; // fresh hop, no chain
+    spaceHeld = true;
+    if (gameRunning && !isInAir) {
+      // Jump
+      isInAir = true;
+      verticalVel = BHOP_JUMP_FORCE;
     }
-    hopSpeedBonus = hopChain * HOP_BONUS_PER_CHAIN;
-    hopVelocityY = HOP_FORCE;
   }
 });
 
 document.addEventListener('keyup', (e) => {
   keys[e.key.toLowerCase()] = false;
   if (e.key === 'Shift') isSprinting = false;
+  if (e.key === ' ') spaceHeld = false;
 });
 
-// Mouse look: dual mode
-// - With pointer lock: direct FPS mouse look using movementX/Y
-// - Without pointer lock: mouse position relative to screen center continuously rotates view
 document.addEventListener('mousemove', (e) => {
   if (!gameRunning) return;
-
   if (pointerLocked) {
-    // Pointer lock mode: standard FPS mouse look
-    const mx = e.movementX || 0;
-    const my = e.movementY || 0;
-    playerRot.y -= mx * 0.003;
-    playerRot.x -= my * 0.003;
+    playerRot.y -= (e.movementX||0) * 0.003;
+    playerRot.x -= (e.movementY||0) * 0.003;
     playerRot.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, playerRot.x));
   } else {
-    // No pointer lock: track mouse position for virtual joystick mode
     mouseScreenX = e.clientX;
     mouseScreenY = e.clientY;
   }
 });
 
-// Click to request pointer lock
 canvas.addEventListener('click', () => {
-  if (gameRunning && !pointerLocked) {
-    canvas.requestPointerLock();
-  }
+  if (gameRunning && !pointerLocked) canvas.requestPointerLock();
 });
 
-// Mobile controls
 ['mb-up','mb-down','mb-left','mb-right'].forEach(id => {
   const el = document.getElementById(id);
-  const key = { 'mb-up':'w', 'mb-down':'s', 'mb-left':'a', 'mb-right':'d' }[id];
-  el.addEventListener('touchstart', (e) => { e.preventDefault(); keys[key] = true; });
-  el.addEventListener('touchend', (e) => { e.preventDefault(); keys[key] = false; });
+  const key = {'mb-up':'w','mb-down':'s','mb-left':'a','mb-right':'d'}[id];
+  el.addEventListener('touchstart',(e)=>{e.preventDefault();keys[key]=true;});
+  el.addEventListener('touchend',(e)=>{e.preventDefault();keys[key]=false;});
 });
 
-let lastTouchX = 0, lastTouchY = 0;
-canvas.addEventListener('touchstart', (e) => {
-  if (e.touches.length === 1) {
-    lastTouchX = e.touches[0].clientX;
-    lastTouchY = e.touches[0].clientY;
-  }
+let lastTouchX=0,lastTouchY=0;
+canvas.addEventListener('touchstart',(e)=>{
+  if(e.touches.length===1){lastTouchX=e.touches[0].clientX;lastTouchY=e.touches[0].clientY;}
 });
-canvas.addEventListener('touchmove', (e) => {
-  if (e.touches.length === 1) {
-    const dx = e.touches[0].clientX - lastTouchX;
-    const dy = e.touches[0].clientY - lastTouchY;
-    playerRot.y -= dx * 0.005;
-    playerRot.x -= dy * 0.005;
-    playerRot.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, playerRot.x));
-    lastTouchX = e.touches[0].clientX;
-    lastTouchY = e.touches[0].clientY;
+canvas.addEventListener('touchmove',(e)=>{
+  if(e.touches.length===1){
+    const dx=e.touches[0].clientX-lastTouchX,dy=e.touches[0].clientY-lastTouchY;
+    playerRot.y-=dx*0.005;playerRot.x-=dy*0.005;
+    playerRot.x=Math.max(-Math.PI/2.5,Math.min(Math.PI/2.5,playerRot.x));
+    lastTouchX=e.touches[0].clientX;lastTouchY=e.touches[0].clientY;
   }
 });
 
-window.addEventListener('resize', () => {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-});
-
+window.addEventListener('resize', () => { canvas.width=window.innerWidth; canvas.height=window.innerHeight; });
 requestAnimationFrame(gameLoop);
 </script>
 </body>
