@@ -692,6 +692,221 @@ function generateCity() {
     buildings.push({ mesh: deck, x: tx, y: 7.5, z: 55, w: 8, h: 1, d: 12, isSign: true });
   }
 
+  // === UNDERGROUND PASSAGES (covered walkways like Shibuya Chikamichi) ===
+  const passageData = [
+    { sx: -35, sz: -3, ex: -160, ez: -3, w: 8, h: 4.5, axis: 'x' },  // West (Mark City direction)
+    { sx: 35, sz: 3, ex: 130, ez: 3, w: 7, h: 4, axis: 'x' },         // East (Hikarie direction)
+    { sx: -3, sz: -35, ex: -3, ez: -130, w: 6, h: 4, axis: 'z' },      // South
+  ];
+  for (const p of passageData) {
+    if (p.axis === 'x') {
+      const minX = Math.min(p.sx, p.ex), maxX = Math.max(p.sx, p.ex);
+      const len = maxX - minX, cx = (minX + maxX) / 2, cz = p.sz;
+      // Ceiling
+      const ceil = createMesh(buildBox(len, 0.4, p.w + 1, 0.08, 0.08, 0.11));
+      buildings.push({ mesh: ceil, x: cx, y: p.h, z: cz, w: len, h: 0.4, d: p.w + 1, isSign: true });
+      // Left wall
+      const lw = createMesh(buildBox(len, p.h, 0.4, 0.10, 0.10, 0.14));
+      buildings.push({ mesh: lw, x: cx, y: p.h/2, z: cz - p.w/2, w: len, h: p.h, d: 0.4 });
+      // Right wall
+      const rw = createMesh(buildBox(len, p.h, 0.4, 0.10, 0.10, 0.14));
+      buildings.push({ mesh: rw, x: cx, y: p.h/2, z: cz + p.w/2, w: len, h: p.h, d: 0.4 });
+      // Floor tiles
+      const fl = createMesh(buildBox(len, 0.05, p.w, 0.18, 0.17, 0.16));
+      buildings.push({ mesh: fl, x: cx, y: 0.025, z: cz, w: len, h: 0.05, d: p.w, isSign: true, emissive: 0.05 });
+      // Ceiling lights
+      for (let lx = minX + 5; lx < maxX; lx += 8) {
+        const lt = createMesh(buildBox(1.2, 0.15, 0.6, 1.0, 0.95, 0.85));
+        buildings.push({ mesh: lt, x: lx, y: p.h - 0.3, z: cz, w: 1.2, h: 0.15, d: 0.6, isSign: true, emissive: 1.0 });
+      }
+      // Shop signs inside passage
+      for (let lx = minX + 10; lx < maxX - 5; lx += 15 + Math.random() * 10) {
+        const nc = accentColors[Math.floor(Math.random() * accentColors.length)];
+        const side = Math.random() > 0.5 ? 1 : -1;
+        const sg = createMesh(buildBox(3, 1.2, 0.2, nc[0], nc[1], nc[2]));
+        buildings.push({ mesh: sg, x: lx, y: 3, z: cz + side * (p.w/2 - 0.3), w: 3, h: 1.2, d: 0.2, isSign: true, emissive: 0.8 });
+      }
+    } else {
+      const minZ = Math.min(p.sz, p.ez), maxZ = Math.max(p.sz, p.ez);
+      const len = maxZ - minZ, cz = (minZ + maxZ) / 2, cx = p.sx;
+      const ceil = createMesh(buildBox(p.w + 1, 0.4, len, 0.08, 0.08, 0.11));
+      buildings.push({ mesh: ceil, x: cx, y: p.h, z: cz, w: p.w + 1, h: 0.4, d: len, isSign: true });
+      const lw = createMesh(buildBox(0.4, p.h, len, 0.10, 0.10, 0.14));
+      buildings.push({ mesh: lw, x: cx - p.w/2, y: p.h/2, z: cz, w: 0.4, h: p.h, d: len });
+      const rw = createMesh(buildBox(0.4, p.h, len, 0.10, 0.10, 0.14));
+      buildings.push({ mesh: rw, x: cx + p.w/2, y: p.h/2, z: cz, w: 0.4, h: p.h, d: len });
+      const fl = createMesh(buildBox(p.w, 0.05, len, 0.18, 0.17, 0.16));
+      buildings.push({ mesh: fl, x: cx, y: 0.025, z: cz, w: p.w, h: 0.05, d: len, isSign: true, emissive: 0.05 });
+      for (let lz = minZ + 5; lz < maxZ; lz += 8) {
+        const lt = createMesh(buildBox(0.6, 0.15, 1.2, 1.0, 0.95, 0.85));
+        buildings.push({ mesh: lt, x: cx, y: p.h - 0.3, z: lz, w: 0.6, h: 0.15, d: 1.2, isSign: true, emissive: 1.0 });
+      }
+      for (let lz = minZ + 10; lz < maxZ - 5; lz += 15 + Math.random() * 10) {
+        const nc = accentColors[Math.floor(Math.random() * accentColors.length)];
+        const side = Math.random() > 0.5 ? 1 : -1;
+        const sg = createMesh(buildBox(0.2, 1.2, 3, nc[0], nc[1], nc[2]));
+        buildings.push({ mesh: sg, x: cx + side * (p.w/2 - 0.3), y: 3, z: lz, w: 0.2, h: 1.2, d: 3, isSign: true, emissive: 0.8 });
+      }
+    }
+  }
+
+  // === ENTERABLE BUILDINGS (hollow with doorways) ===
+  const enterables = [
+    { x: -38, z: 20, w: 12, d: 10, h: 8, door: 'front' },
+    { x: 30, z: -25, w: 10, d: 12, h: 10, door: 'left' },
+    { x: -35, z: -22, w: 14, d: 10, h: 6, door: 'front' },
+    { x: 25, z: 32, w: 10, d: 14, h: 12, door: 'right' },
+    { x: -10, z: 40, w: 16, d: 10, h: 7, door: 'front' },
+  ];
+  for (const eb of enterables) {
+    const hw = eb.w/2, hd = eb.d/2;
+    const wallT = 0.5, doorW = 4;
+    const col = bldgColors[Math.floor(Math.random() * bldgColors.length)];
+    // Roof
+    const roof = createMesh(buildBox(eb.w + 0.5, 0.4, eb.d + 0.5, col[0]*0.8, col[1]*0.8, col[2]*0.8));
+    buildings.push({ mesh: roof, x: eb.x, y: eb.h, z: eb.z, w: eb.w+0.5, h: 0.4, d: eb.d+0.5, isSign: true });
+    // Floor
+    const efl = createMesh(buildBox(eb.w, 0.05, eb.d, 0.20, 0.18, 0.16));
+    buildings.push({ mesh: efl, x: eb.x, y: 0.025, z: eb.z, w: eb.w, h: 0.05, d: eb.d, isSign: true, emissive: 0.1 });
+    // Interior light
+    const iLight = createMesh(buildBox(2, 0.2, 2, 1.0, 0.95, 0.85));
+    buildings.push({ mesh: iLight, x: eb.x, y: eb.h - 0.5, z: eb.z, w: 2, h: 0.2, d: 2, isSign: true, emissive: 0.9 });
+    // Walls (split the door-side wall into two pieces with a gap)
+    const sides = ['front','back','left','right'];
+    for (const side of sides) {
+      const hasDoor = (side === eb.door);
+      if (side === 'front') {
+        if (!hasDoor) {
+          const wm = createMesh(buildBox(eb.w, eb.h, wallT, col[0], col[1], col[2]));
+          buildings.push({ mesh: wm, x: eb.x, y: eb.h/2, z: eb.z + hd, w: eb.w, h: eb.h, d: wallT });
+        } else {
+          const sW = (eb.w - doorW) / 2;
+          if (sW > 0.5) {
+            const wL = createMesh(buildBox(sW, eb.h, wallT, col[0], col[1], col[2]));
+            buildings.push({ mesh: wL, x: eb.x - hw + sW/2, y: eb.h/2, z: eb.z + hd, w: sW, h: eb.h, d: wallT });
+            const wR = createMesh(buildBox(sW, eb.h, wallT, col[0], col[1], col[2]));
+            buildings.push({ mesh: wR, x: eb.x + hw - sW/2, y: eb.h/2, z: eb.z + hd, w: sW, h: eb.h, d: wallT });
+          }
+        }
+      } else if (side === 'back') {
+        if (!hasDoor) {
+          const wm = createMesh(buildBox(eb.w, eb.h, wallT, col[0], col[1], col[2]));
+          buildings.push({ mesh: wm, x: eb.x, y: eb.h/2, z: eb.z - hd, w: eb.w, h: eb.h, d: wallT });
+        } else {
+          const sW = (eb.w - doorW) / 2;
+          if (sW > 0.5) {
+            const wL = createMesh(buildBox(sW, eb.h, wallT, col[0], col[1], col[2]));
+            buildings.push({ mesh: wL, x: eb.x - hw + sW/2, y: eb.h/2, z: eb.z - hd, w: sW, h: eb.h, d: wallT });
+            const wR = createMesh(buildBox(sW, eb.h, wallT, col[0], col[1], col[2]));
+            buildings.push({ mesh: wR, x: eb.x + hw - sW/2, y: eb.h/2, z: eb.z - hd, w: sW, h: eb.h, d: wallT });
+          }
+        }
+      } else if (side === 'left') {
+        if (!hasDoor) {
+          const wm = createMesh(buildBox(wallT, eb.h, eb.d, col[0], col[1], col[2]));
+          buildings.push({ mesh: wm, x: eb.x - hw, y: eb.h/2, z: eb.z, w: wallT, h: eb.h, d: eb.d });
+        } else {
+          const sD = (eb.d - doorW) / 2;
+          if (sD > 0.5) {
+            const wL = createMesh(buildBox(wallT, eb.h, sD, col[0], col[1], col[2]));
+            buildings.push({ mesh: wL, x: eb.x - hw, y: eb.h/2, z: eb.z - hd + sD/2, w: wallT, h: eb.h, d: sD });
+            const wR = createMesh(buildBox(wallT, eb.h, sD, col[0], col[1], col[2]));
+            buildings.push({ mesh: wR, x: eb.x - hw, y: eb.h/2, z: eb.z + hd - sD/2, w: wallT, h: eb.h, d: sD });
+          }
+        }
+      } else {
+        if (!hasDoor) {
+          const wm = createMesh(buildBox(wallT, eb.h, eb.d, col[0], col[1], col[2]));
+          buildings.push({ mesh: wm, x: eb.x + hw, y: eb.h/2, z: eb.z, w: wallT, h: eb.h, d: eb.d });
+        } else {
+          const sD = (eb.d - doorW) / 2;
+          if (sD > 0.5) {
+            const wL = createMesh(buildBox(wallT, eb.h, sD, col[0], col[1], col[2]));
+            buildings.push({ mesh: wL, x: eb.x + hw, y: eb.h/2, z: eb.z - hd + sD/2, w: wallT, h: eb.h, d: sD });
+            const wR = createMesh(buildBox(wallT, eb.h, sD, col[0], col[1], col[2]));
+            buildings.push({ mesh: wR, x: eb.x + hw, y: eb.h/2, z: eb.z + hd - sD/2, w: wallT, h: eb.h, d: sD });
+          }
+        }
+      }
+    }
+    // Neon entrance sign above door
+    const nc = accentColors[Math.floor(Math.random() * accentColors.length)];
+    let signX = eb.x, signZ = eb.z;
+    if (eb.door === 'front') signZ = eb.z + hd + 0.3;
+    else if (eb.door === 'back') signZ = eb.z - hd - 0.3;
+    else if (eb.door === 'left') signX = eb.x - hw - 0.3;
+    else signX = eb.x + hw + 0.3;
+    const isXDoor = (eb.door === 'left' || eb.door === 'right');
+    const entrSign = createMesh(buildBox(isXDoor ? 0.2 : doorW+1, 1.5, isXDoor ? doorW+1 : 0.2, nc[0], nc[1], nc[2]));
+    buildings.push({ mesh: entrSign, x: signX, y: eb.h - 1, z: signZ, w: isXDoor ? 0.2 : doorW+1, h: 1.5, d: isXDoor ? doorW+1 : 0.2, isSign: true, emissive: 1.0 });
+  }
+
+  // === VENDING MACHINES (along sidewalks) ===
+  const vmColors = [[1.0, 0.2, 0.2], [0.2, 0.4, 1.0], [0.2, 0.8, 0.3], [1.0, 0.5, 0.0], [0.8, 0.2, 0.8]];
+  for (let vi = 0; vi < 50; vi++) {
+    const vx = -CITY_SIZE/2 + Math.random() * CITY_SIZE;
+    const vz = -CITY_SIZE/2 + Math.random() * CITY_SIZE;
+    if (Math.abs(vx) < SAFE_ZONE && Math.abs(vz) < SAFE_ZONE) continue;
+    const vc = vmColors[Math.floor(Math.random() * vmColors.length)];
+    const vm = createMesh(buildBox(0.8, 1.8, 0.6, vc[0]*0.7, vc[1]*0.7, vc[2]*0.7));
+    buildings.push({ mesh: vm, x: vx, y: 0.9, z: vz, w: 0.8, h: 1.8, d: 0.6, isSign: true, emissive: 0.4 });
+    const vl = createMesh(buildBox(0.7, 0.3, 0.5, vc[0], vc[1], vc[2]));
+    buildings.push({ mesh: vl, x: vx, y: 1.95, z: vz, w: 0.7, h: 0.3, d: 0.5, isSign: true, emissive: 0.9 });
+  }
+
+  // === TRAFFIC LIGHTS at road intersections ===
+  for (let tlx = -CITY_SIZE + BLOCK_SIZE; tlx < CITY_SIZE; tlx += BLOCK_SIZE) {
+    for (let tlz = -CITY_SIZE + BLOCK_SIZE; tlz < CITY_SIZE; tlz += BLOCK_SIZE) {
+      if (Math.abs(tlx) < SAFE_ZONE + 10 && Math.abs(tlz) < SAFE_ZONE + 10) continue;
+      if (Math.random() > 0.4) continue;
+      const pole = createMesh(buildBox(0.12, 5.5, 0.12, 0.25, 0.25, 0.25));
+      buildings.push({ mesh: pole, x: tlx + 2, y: 2.75, z: tlz + 2, w: 0.12, h: 5.5, d: 0.12, isSign: true });
+      const lightBox = createMesh(buildBox(0.5, 1.5, 0.5, 0.08, 0.08, 0.08));
+      buildings.push({ mesh: lightBox, x: tlx + 2, y: 5.8, z: tlz + 2, w: 0.5, h: 1.5, d: 0.5, isSign: true });
+      const rl = createMesh(buildBox(0.2, 0.2, 0.1, 1.0, 0.1, 0.1));
+      buildings.push({ mesh: rl, x: tlx + 2, y: 6.2, z: tlz + 2.3, w: 0.2, h: 0.2, d: 0.1, isSign: true, emissive: 0.8 });
+      const yl = createMesh(buildBox(0.2, 0.2, 0.1, 1.0, 0.8, 0.0));
+      buildings.push({ mesh: yl, x: tlx + 2, y: 5.8, z: tlz + 2.3, w: 0.2, h: 0.2, d: 0.1, isSign: true, emissive: 0.3 });
+      const grl = createMesh(buildBox(0.2, 0.2, 0.1, 0.0, 1.0, 0.2));
+      buildings.push({ mesh: grl, x: tlx + 2, y: 5.4, z: tlz + 2.3, w: 0.2, h: 0.2, d: 0.1, isSign: true, emissive: 0.3 });
+    }
+  }
+
+  // === PARK BENCHES near station area ===
+  for (let bi = 0; bi < 20; bi++) {
+    const bx = -80 + Math.random() * 160;
+    const bz = -80 + Math.random() * 160;
+    if (Math.abs(bx) < SAFE_ZONE && Math.abs(bz) < SAFE_ZONE) continue;
+    const seat = createMesh(buildBox(2, 0.08, 0.5, 0.35, 0.22, 0.12));
+    buildings.push({ mesh: seat, x: bx, y: 0.45, z: bz, w: 2, h: 0.08, d: 0.5, isSign: true });
+    const leg1 = createMesh(buildBox(0.08, 0.4, 0.08, 0.3, 0.3, 0.3));
+    buildings.push({ mesh: leg1, x: bx - 0.8, y: 0.2, z: bz, w: 0.08, h: 0.4, d: 0.08, isSign: true });
+    const leg2 = createMesh(buildBox(0.08, 0.4, 0.08, 0.3, 0.3, 0.3));
+    buildings.push({ mesh: leg2, x: bx + 0.8, y: 0.2, z: bz, w: 0.08, h: 0.4, d: 0.08, isSign: true });
+  }
+
+  // === TREE PLANTERS along roads ===
+  for (let ti = 0; ti < 40; ti++) {
+    const tx = -CITY_SIZE/2 + Math.random() * CITY_SIZE;
+    const tz = -CITY_SIZE/2 + Math.random() * CITY_SIZE;
+    if (Math.abs(tx) < SAFE_ZONE && Math.abs(tz) < SAFE_ZONE) continue;
+    const planter = createMesh(buildBox(1.2, 0.5, 1.2, 0.35, 0.30, 0.25));
+    buildings.push({ mesh: planter, x: tx, y: 0.25, z: tz, w: 1.2, h: 0.5, d: 1.2, isSign: true });
+    const trunk = createMesh(buildBox(0.3, 3, 0.3, 0.30, 0.20, 0.10));
+    buildings.push({ mesh: trunk, x: tx, y: 2, z: tz, w: 0.3, h: 3, d: 0.3, isSign: true });
+    const canopy = createMesh(buildBox(2.5, 2.5, 2.5, 0.1, 0.35, 0.12));
+    buildings.push({ mesh: canopy, x: tx, y: 4.5, z: tz, w: 2.5, h: 2.5, d: 2.5, isSign: true });
+  }
+
+  // === GUARDRAILS along major roads ===
+  for (let grx = -CITY_SIZE; grx < CITY_SIZE; grx += BLOCK_SIZE) {
+    for (let seg = grx + ROAD_WIDTH; seg < grx + BLOCK_SIZE - 2; seg += 30 + Math.random() * 20) {
+      if (Math.random() > 0.5) continue;
+      const gr = createMesh(buildBox(8, 0.8, 0.08, 0.5, 0.5, 0.5));
+      buildings.push({ mesh: gr, x: seg, y: 0.4, z: grx + 4, w: 8, h: 0.8, d: 0.08, isSign: true });
+    }
+  }
+
   // Scramble crossing road markings at origin (big white stripes)
   // Already handled in buildGround
 }
@@ -771,6 +986,8 @@ function spawnFace() {
     z: playerPos.z + Math.sin(angle) * dist,
     speed: 0.08 + Math.random() * 0.04 + score * 0.0002,
     scale: scale,
+    stuckTime: 0,
+    wallDir: (Math.random() > 0.5 ? 1 : -1),
   };
 }
 
@@ -945,11 +1162,53 @@ function update(dt) {
     const dx=playerPos.x-f.x, dz=playerPos.z-f.z;
     const dist = Math.sqrt(dx*dx+dz*dz);
     if (dist > 0.1) {
-      const dirX=dx/dist, dirZ=dz/dist;
-      const speedMult = 1 + Math.max(0,(40-dist)) * 0.04;
-      const nx=f.x+dirX*f.speed*speedMult, nz=f.z+dirZ*f.speed*speedMult;
-      if (!checkBuildingCollision(nx, nz)) { f.x=nx; f.z=nz; }
-      else { f.x+=dirZ*f.speed*0.5; f.z-=dirX*f.speed*0.5; }
+      const baseAngle = Math.atan2(dx, dz);
+      const speedMult = 1 + Math.max(0,(40-dist)) * 0.05;
+      const spd = f.speed * speedMult;
+      let moved = false;
+
+      // 1. Try direct path to player
+      const nx = f.x + Math.sin(baseAngle) * spd;
+      const nz = f.z + Math.cos(baseAngle) * spd;
+      if (!checkBuildingCollision(nx, nz)) {
+        f.x = nx; f.z = nz; moved = true; f.stuckTime = 0;
+      }
+
+      // 2. Sweep angles - try wall-follow preferred side first, then opposite
+      if (!moved) {
+        const dir = f.wallDir;
+        const angles = [
+          0.35*dir, 0.7*dir, 1.05*dir, 1.4*dir, 1.75*dir, 2.1*dir, 2.5*dir,
+          -0.35*dir, -0.7*dir, -1.05*dir, -1.4*dir, -1.75*dir, -2.1*dir, -2.5*dir,
+          Math.PI
+        ];
+        for (const off of angles) {
+          const a = baseAngle + off;
+          const ax = f.x + Math.sin(a) * spd;
+          const az = f.z + Math.cos(a) * spd;
+          if (!checkBuildingCollision(ax, az)) {
+            f.x = ax; f.z = az; moved = true; f.stuckTime = 0;
+            break;
+          }
+        }
+      }
+
+      // 3. Still stuck: accumulate time, teleport after 2s
+      if (!moved) {
+        f.stuckTime += dt;
+        if (f.stuckTime > 2) {
+          f.wallDir *= -1;
+          for (let i = 0; i < 30; i++) {
+            const ta = Math.random() * Math.PI * 2;
+            const td = 5 + Math.random() * 20;
+            const tx = f.x + Math.cos(ta) * td;
+            const tz = f.z + Math.sin(ta) * td;
+            if (!checkBuildingCollision(tx, tz)) {
+              f.x = tx; f.z = tz; f.stuckTime = 0; break;
+            }
+          }
+        }
+      }
     }
     if (dist < closestDist) closestDist = dist;
     if (dist < 3.0) { gameOver(); return; }
