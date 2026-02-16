@@ -463,23 +463,24 @@ function createMesh(data) {
   };
 }
 
-// ===== FACE TEXTURE FROM URL (GIF with animation) =====
+// ===== FACE TEXTURE FROM URL (GIF with animation via ImageDecoder) =====
 let faceTexture = gl.createTexture();
 let faceImgLoaded = false;
+let faceAspect = 1; // width / height ratio
 
-// Hidden img element in DOM so browser keeps animating the GIF
+// Fallback img element for static display
 const faceImg = document.createElement('img');
 faceImg.crossOrigin = 'anonymous';
-faceImg.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;';
+faceImg.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:-1;';
 document.body.appendChild(faceImg);
 
-// Canvas intermediary to capture current GIF frame reliably
-const faceDrawCanvas = document.createElement('canvas');
-faceDrawCanvas.width = 256;
-faceDrawCanvas.height = 256;
-const faceDrawCtx = faceDrawCanvas.getContext('2d');
+// GIF frame decoder state
+let gifFrames = [];
+let currentGifFrame = 0;
+let lastGifFrameTime = 0;
+let gifDecoderReady = false;
 
-// Initialize with a 1x1 red pixel placeholder
+// Initialize placeholder texture
 gl.bindTexture(gl.TEXTURE_2D, faceTexture);
 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 0, 0, 255]));
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -487,18 +488,68 @@ gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
+const FACE_IMG_URL = 'https://241829.com/20260207.gif';
+
+// Try to decode GIF frames using ImageDecoder API (Chrome/Edge)
+async function initGifDecoder(url) {
+  if (typeof ImageDecoder !== 'undefined') {
+    try {
+      const resp = await fetch(url, { mode: 'cors' });
+      if (!resp.ok) throw new Error('fetch failed');
+      const decoder = new ImageDecoder({ data: resp.body, type: 'image/gif' });
+      await decoder.tracks.ready;
+      const count = decoder.tracks.selectedTrack.frameCount;
+      for (let i = 0; i < count; i++) {
+        const result = await decoder.decode({ frameIndex: i });
+        const vf = result.image;
+        if (i === 0) faceAspect = vf.displayWidth / vf.displayHeight;
+        const bitmap = await createImageBitmap(vf);
+        const dur = (vf.duration || 100000) / 1000; // microseconds to ms
+        vf.close();
+        gifFrames.push({ bitmap, duration: dur });
+      }
+      decoder.close();
+      gifDecoderReady = true;
+      faceImgLoaded = true;
+      lastGifFrameTime = performance.now();
+      return;
+    } catch(e) {
+      console.warn('ImageDecoder failed, using static fallback:', e);
+    }
+  }
+}
+
+// Load static fallback via img element
 faceImg.onload = function() {
   faceImgLoaded = true;
+  if (faceImg.naturalWidth > 0 && faceImg.naturalHeight > 0) {
+    faceAspect = faceImg.naturalWidth / faceImg.naturalHeight;
+  }
 };
-faceImg.src = 'https://241829.com/20260207.gif';
+faceImg.src = FACE_IMG_URL;
 
-// Call each frame to re-upload current GIF frame to WebGL texture
+// Start GIF decoder (runs in parallel with img load)
+initGifDecoder(FACE_IMG_URL);
+
+// Upload current GIF frame or static image to WebGL texture
 function updateFaceTexture() {
-  if (!faceImgLoaded) return;
-  faceDrawCtx.clearRect(0, 0, 256, 256);
-  faceDrawCtx.drawImage(faceImg, 0, 0, 256, 256);
-  gl.bindTexture(gl.TEXTURE_2D, faceTexture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, faceDrawCanvas);
+  if (gifDecoderReady && gifFrames.length > 0) {
+    // Animated GIF: cycle through decoded frames
+    const now = performance.now();
+    const frame = gifFrames[currentGifFrame];
+    if (now - lastGifFrameTime >= frame.duration) {
+      currentGifFrame = (currentGifFrame + 1) % gifFrames.length;
+      lastGifFrameTime = now;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, faceTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gifFrames[currentGifFrame].bitmap);
+  } else if (faceImgLoaded) {
+    // Static fallback
+    gl.bindTexture(gl.TEXTURE_2D, faceTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, faceImg);
+  } else {
+    return;
+  }
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -641,14 +692,13 @@ let groundMesh;
 function spawnFace() {
   const angle = Math.random() * Math.PI * 2;
   const dist = 40 + Math.random() * 30;
+  const scale = 1.0 + Math.random() * 0.4; // NEXTBOTS: human-sized
   return {
     x: playerPos.x + Math.cos(angle) * dist,
-    y: 2.5 + Math.random() * 3,
+    y: scale, // Bottom touches ground (quad center at y=scale)
     z: playerPos.z + Math.sin(angle) * dist,
     speed: 0.03 + Math.random() * 0.02 + score * 0.0001,
-    scale: 1.5 + Math.random() * 1.5,
-    wobble: Math.random() * Math.PI * 2,
-    wobbleSpeed: 1 + Math.random() * 2,
+    scale: scale,
   };
 }
 
@@ -702,14 +752,13 @@ function drawMesh(mesh, modelMatrix, viewMatrix, projMatrix, emissive) {
 function drawFaceBillboard(f, viewMatrix, projMatrix) {
   gl.useProgram(bbProgram);
 
-  // Billboard: translate, face player, wobble, scale
+  // Billboard: translate, face player, correct aspect ratio
   let model = mat4Identity();
   model = mat4Translate(model, f.x, f.y, f.z);
   const angle = Math.atan2(playerPos.x - f.x, playerPos.z - f.z);
   model = mat4RotateY(model, angle);
-  model = mat4RotateX(model, Math.sin(f.wobble * 2) * 0.1);
-  const s = f.scale * 2.5;
-  model = mat4Scale(model, s, s, s);
+  const s = f.scale;
+  model = mat4Scale(model, s * faceAspect, s, s); // Preserve image aspect ratio
 
   const mvp = mat4Multiply(projMatrix, mat4Multiply(viewMatrix, model));
 
@@ -870,9 +919,6 @@ function update(dt) {
         f.z -= dirX * f.speed * 0.5;
       }
     }
-
-    f.wobble += f.wobbleSpeed * dt;
-    f.y = 2.5 + Math.sin(f.wobble) * 0.5;
 
     if (dist < closestDist) closestDist = dist;
 
