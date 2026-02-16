@@ -697,6 +697,9 @@ function generateCity() {
     { sx: -35, sz: -3, ex: -160, ez: -3, w: 8, h: 4.5, axis: 'x' },  // West (Mark City direction)
     { sx: 35, sz: 3, ex: 130, ez: 3, w: 7, h: 4, axis: 'x' },         // East (Hikarie direction)
     { sx: -3, sz: -35, ex: -3, ez: -130, w: 6, h: 4, axis: 'z' },      // South
+    { sx: 3, sz: 35, ex: 3, ez: 160, w: 7, h: 4.5, axis: 'z' },        // North (Miyashita Park direction)
+    { sx: -160, sz: -3, ex: -160, ez: -80, w: 6, h: 4, axis: 'z' },    // West-South connector (L-shaped)
+    { sx: 130, sz: 3, ex: 130, ez: 70, w: 6, h: 4, axis: 'z' },        // East-North connector
   ];
   for (const p of passageData) {
     if (p.axis === 'x') {
@@ -752,11 +755,20 @@ function generateCity() {
 
   // === ENTERABLE BUILDINGS (hollow with doorways) ===
   const enterables = [
-    { x: -38, z: 20, w: 12, d: 10, h: 8, door: 'front' },
-    { x: 30, z: -25, w: 10, d: 12, h: 10, door: 'left' },
-    { x: -35, z: -22, w: 14, d: 10, h: 6, door: 'front' },
-    { x: 25, z: 32, w: 10, d: 14, h: 12, door: 'right' },
-    { x: -10, z: 40, w: 16, d: 10, h: 7, door: 'front' },
+    { x: -38, z: 20, w: 12, d: 10, h: 8, door: 'front', name: 'KONBINI' },
+    { x: 30, z: -25, w: 10, d: 12, h: 10, door: 'left', name: 'GAME CENTER' },
+    { x: -35, z: -22, w: 14, d: 10, h: 6, door: 'front', name: 'CAFE' },
+    { x: 25, z: 32, w: 10, d: 14, h: 12, door: 'right', name: 'KARAOKE' },
+    { x: -10, z: 40, w: 16, d: 10, h: 7, door: 'front', name: 'DRUG STORE' },
+    // New buildings
+    { x: 55, z: -45, w: 18, d: 14, h: 12, door: 'front', name: 'DEPARTMENT STORE' },
+    { x: -55, z: -50, w: 12, d: 12, h: 8, door: 'right', name: 'RAMEN' },
+    { x: 60, z: 55, w: 14, d: 10, h: 9, door: 'front', name: 'IZAKAYA' },
+    { x: -65, z: 50, w: 16, d: 12, h: 10, door: 'left', name: 'PACHINKO' },
+    { x: 0, z: -55, w: 12, d: 10, h: 7, door: 'back', name: 'BOOK OFF' },
+    { x: -80, z: -10, w: 10, d: 14, h: 8, door: 'front', name: 'DON QUIJOTE' },
+    { x: 80, z: 15, w: 14, d: 12, h: 11, door: 'left', name: 'MEGA DONKI' },
+    { x: -20, z: -65, w: 20, d: 16, h: 14, door: 'front', name: 'TOWER RECORDS' },
   ];
   for (const eb of enterables) {
     const hw = eb.w/2, hd = eb.d/2;
@@ -839,6 +851,204 @@ function generateCity() {
     const isXDoor = (eb.door === 'left' || eb.door === 'right');
     const entrSign = createMesh(buildBox(isXDoor ? 0.2 : doorW+1, 1.5, isXDoor ? doorW+1 : 0.2, nc[0], nc[1], nc[2]));
     buildings.push({ mesh: entrSign, x: signX, y: eb.h - 1, z: signZ, w: isXDoor ? 0.2 : doorW+1, h: 1.5, d: isXDoor ? doorW+1 : 0.2, isSign: true, emissive: 1.0 });
+
+    // Interior shelves/counters (adds detail inside)
+    const numShelves = 1 + Math.floor(Math.random() * 3);
+    for (let si = 0; si < numShelves; si++) {
+      const shW = 1.5 + Math.random() * 2;
+      const shD = 0.5 + Math.random() * 0.5;
+      const shH = 1.2 + Math.random() * 0.8;
+      const shX = eb.x + (Math.random() - 0.5) * (eb.w - shW - 2);
+      const shZ = eb.z + (Math.random() - 0.5) * (eb.d - shD - 2);
+      const sc = shopColors[Math.floor(Math.random() * shopColors.length)];
+      const shelf = createMesh(buildBox(shW, shH, shD, sc[0]*1.3, sc[1]*1.3, sc[2]*1.3));
+      buildings.push({ mesh: shelf, x: shX, y: shH/2, z: shZ, w: shW, h: shH, d: shD, isSign: true, emissive: 0.05 });
+    }
+  }
+
+  // === HACHIKO STATUE (famous meeting point) ===
+  // Located near Shibuya station, south side of scramble
+  const hachiBase = createMesh(buildBox(2, 0.6, 2, 0.35, 0.30, 0.28));
+  buildings.push({ mesh: hachiBase, x: -12, y: 0.3, z: -30, w: 2, h: 0.6, d: 2, isSign: true });
+  const hachiBody = createMesh(buildBox(1.2, 1.0, 0.6, 0.55, 0.45, 0.30));
+  buildings.push({ mesh: hachiBody, x: -12, y: 1.1, z: -30, w: 1.2, h: 1.0, d: 0.6, isSign: true });
+  const hachiHead = createMesh(buildBox(0.5, 0.5, 0.5, 0.55, 0.45, 0.30));
+  buildings.push({ mesh: hachiHead, x: -12, y: 1.85, z: -29.7, w: 0.5, h: 0.5, d: 0.5, isSign: true });
+  // Info plaque
+  const hachiPlaque = createMesh(buildBox(1.5, 0.8, 0.1, 0.7, 0.6, 0.3));
+  buildings.push({ mesh: hachiPlaque, x: -12, y: 0.8, z: -28.8, w: 1.5, h: 0.8, d: 0.1, isSign: true, emissive: 0.2 });
+
+  // === CENTER-GAI SHOPPING STREET ARCH ===
+  // Iconic entrance arch with neon
+  const archH = 7, archW = 10, archD = 1.5;
+  // Left pillar
+  const archL = createMesh(buildBox(1.5, archH, archD, 0.8, 0.15, 0.25));
+  buildings.push({ mesh: archL, x: -5, y: archH/2, z: -35, w: 1.5, h: archH, d: archD });
+  // Right pillar
+  const archR = createMesh(buildBox(1.5, archH, archD, 0.8, 0.15, 0.25));
+  buildings.push({ mesh: archR, x: 5, y: archH/2, z: -35, w: 1.5, h: archH, d: archD });
+  // Top beam
+  const archTop = createMesh(buildBox(archW + 3, 2, archD, 1.0, 0.17, 0.48));
+  buildings.push({ mesh: archTop, x: 0, y: archH + 1, z: -35, w: archW + 3, h: 2, d: archD, isSign: true, emissive: 0.8 });
+  // "CENTER GAI" text sign
+  const archSign = createMesh(buildBox(8, 1.2, 0.3, 1.0, 1.0, 0.0));
+  buildings.push({ mesh: archSign, x: 0, y: archH + 0.5, z: -34, w: 8, h: 1.2, d: 0.3, isSign: true, emissive: 1.0 });
+
+  // === SUBWAY STATION ENTRANCES ===
+  const subwayEntrances = [
+    { x: 20, z: -28, rot: 'z' },   // Near scramble
+    { x: -25, z: 25, rot: 'x' },   // West side
+    { x: 70, z: -15, rot: 'z' },   // Near Hikarie
+  ];
+  for (const se of subwayEntrances) {
+    // Entrance canopy (glass-like roof)
+    const seW = se.rot === 'z' ? 6 : 4;
+    const seD = se.rot === 'z' ? 4 : 6;
+    const canopy = createMesh(buildBox(seW + 2, 0.3, seD + 2, 0.3, 0.4, 0.5));
+    buildings.push({ mesh: canopy, x: se.x, y: 3.2, z: se.z, w: seW + 2, h: 0.3, d: seD + 2, isSign: true, emissive: 0.2 });
+    // Support poles (4 corners)
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const pole = createMesh(buildBox(0.15, 3.2, 0.15, 0.4, 0.4, 0.4));
+        buildings.push({ mesh: pole, x: se.x + sx * seW/2, y: 1.6, z: se.z + sz * seD/2, w: 0.15, h: 3.2, d: 0.15, isSign: true });
+      }
+    }
+    // Stairs going down (stepped blocks)
+    for (let step = 0; step < 6; step++) {
+      const stepY = -step * 0.3;
+      const stepOff = step * 0.5;
+      const isXStairs = se.rot === 'x';
+      const stMesh = createMesh(buildBox(isXStairs ? 0.5 : seW - 1, 0.3, isXStairs ? seD - 1 : 0.5, 0.25, 0.25, 0.27));
+      buildings.push({
+        mesh: stMesh,
+        x: se.x + (isXStairs ? stepOff : 0),
+        y: Math.max(0.15, 0.15 + stepY),
+        z: se.z + (isXStairs ? 0 : stepOff),
+        w: isXStairs ? 0.5 : seW - 1, h: 0.3, d: isXStairs ? seD - 1 : 0.5, isSign: true
+      });
+    }
+    // Metro sign (blue "M")
+    const mSign = createMesh(buildBox(1.5, 1.5, 0.2, 0.0, 0.3, 0.8));
+    buildings.push({ mesh: mSign, x: se.x, y: 3.8, z: se.z, w: 1.5, h: 1.5, d: 0.2, isSign: true, emissive: 0.9 });
+    // Railing along stairs
+    const railL = createMesh(buildBox(0.08, 1.0, seD - 1, 0.5, 0.5, 0.5));
+    buildings.push({ mesh: railL, x: se.x - seW/2 + 0.5, y: 0.5, z: se.z, w: 0.08, h: 1.0, d: seD - 1, isSign: true });
+    const railR = createMesh(buildBox(0.08, 1.0, seD - 1, 0.5, 0.5, 0.5));
+    buildings.push({ mesh: railR, x: se.x + seW/2 - 0.5, y: 0.5, z: se.z, w: 0.08, h: 1.0, d: seD - 1, isSign: true });
+  }
+
+  // === PEDESTRIAN OVERPASS/BRIDGE (like Shibuya Mark City connector) ===
+  const bridgeY = 6, bridgeW = 4;
+  // Main bridge deck (east-west over scramble area)
+  const bridgeDeck = createMesh(buildBox(60, 0.5, bridgeW, 0.18, 0.18, 0.22));
+  buildings.push({ mesh: bridgeDeck, x: 0, y: bridgeY, z: -45, w: 60, h: 0.5, d: bridgeW, isSign: true });
+  // Glass walls on bridge
+  const bridgeWallL = createMesh(buildBox(60, 1.5, 0.15, 0.25, 0.35, 0.4));
+  buildings.push({ mesh: bridgeWallL, x: 0, y: bridgeY + 1, z: -45 - bridgeW/2, w: 60, h: 1.5, d: 0.15, isSign: true, emissive: 0.1 });
+  const bridgeWallR = createMesh(buildBox(60, 1.5, 0.15, 0.25, 0.35, 0.4));
+  buildings.push({ mesh: bridgeWallR, x: 0, y: bridgeY + 1, z: -45 + bridgeW/2, w: 60, h: 1.5, d: 0.15, isSign: true, emissive: 0.1 });
+  // Support columns for bridge
+  for (let bpx = -25; bpx <= 25; bpx += 12.5) {
+    const col = createMesh(buildBox(0.8, bridgeY, 0.8, 0.22, 0.22, 0.25));
+    buildings.push({ mesh: col, x: bpx, y: bridgeY/2, z: -45, w: 0.8, h: bridgeY, d: 0.8 });
+  }
+
+  // === BUS STOPS ===
+  const busStops = [
+    { x: -30, z: -38 }, { x: 40, z: 38 }, { x: -70, z: 10 }, { x: 75, z: -25 },
+  ];
+  for (const bs of busStops) {
+    // Shelter roof
+    const bsRoof = createMesh(buildBox(5, 0.15, 2, 0.3, 0.4, 0.5));
+    buildings.push({ mesh: bsRoof, x: bs.x, y: 2.8, z: bs.z, w: 5, h: 0.15, d: 2, isSign: true, emissive: 0.1 });
+    // Back panel
+    const bsBack = createMesh(buildBox(5, 2.8, 0.1, 0.25, 0.35, 0.4));
+    buildings.push({ mesh: bsBack, x: bs.x, y: 1.4, z: bs.z - 1, w: 5, h: 2.8, d: 0.1, isSign: true, emissive: 0.05 });
+    // Support poles
+    const bsP1 = createMesh(buildBox(0.1, 2.8, 0.1, 0.4, 0.4, 0.4));
+    buildings.push({ mesh: bsP1, x: bs.x - 2.3, y: 1.4, z: bs.z + 0.8, w: 0.1, h: 2.8, d: 0.1, isSign: true });
+    const bsP2 = createMesh(buildBox(0.1, 2.8, 0.1, 0.4, 0.4, 0.4));
+    buildings.push({ mesh: bsP2, x: bs.x + 2.3, y: 1.4, z: bs.z + 0.8, w: 0.1, h: 2.8, d: 0.1, isSign: true });
+    // Bench inside
+    const bsBench = createMesh(buildBox(3, 0.08, 0.4, 0.4, 0.25, 0.15));
+    buildings.push({ mesh: bsBench, x: bs.x, y: 0.5, z: bs.z - 0.5, w: 3, h: 0.08, d: 0.4, isSign: true });
+    // Route sign
+    const bsSign = createMesh(buildBox(0.8, 0.6, 0.1, 0.0, 0.6, 0.3));
+    buildings.push({ mesh: bsSign, x: bs.x + 2.3, y: 2.5, z: bs.z + 0.9, w: 0.8, h: 0.6, d: 0.1, isSign: true, emissive: 0.7 });
+  }
+
+  // === BOLLARDS (anti-vehicle posts along sidewalks) ===
+  for (let bi = 0; bi < 80; bi++) {
+    const bx = -CITY_SIZE/3 + Math.random() * CITY_SIZE * 0.66;
+    const bz = -CITY_SIZE/3 + Math.random() * CITY_SIZE * 0.66;
+    if (Math.abs(bx) < SAFE_ZONE && Math.abs(bz) < SAFE_ZONE) continue;
+    const bollard = createMesh(buildBox(0.2, 0.8, 0.2, 0.5, 0.5, 0.5));
+    buildings.push({ mesh: bollard, x: bx, y: 0.4, z: bz, w: 0.2, h: 0.8, d: 0.2, isSign: true });
+  }
+
+  // === NARROW BACK ALLEYS between blocks ===
+  // Add atmospheric alley walls creating tight corridors
+  const alleyData = [
+    { x: -90, z: 25, len: 30, axis: 'z', w: 3 },
+    { x: 75, z: -40, len: 25, axis: 'z', w: 2.5 },
+    { x: -45, z: 80, len: 35, axis: 'x', w: 3 },
+    { x: 50, z: -80, len: 20, axis: 'x', w: 2.5 },
+  ];
+  for (const al of alleyData) {
+    const alCol = [0.08, 0.08, 0.10];
+    if (al.axis === 'z') {
+      // Left wall
+      const alWL = createMesh(buildBox(0.4, 6, al.len, alCol[0], alCol[1], alCol[2]));
+      buildings.push({ mesh: alWL, x: al.x - al.w/2, y: 3, z: al.z, w: 0.4, h: 6, d: al.len });
+      // Right wall
+      const alWR = createMesh(buildBox(0.4, 6, al.len, alCol[0], alCol[1], alCol[2]));
+      buildings.push({ mesh: alWR, x: al.x + al.w/2, y: 3, z: al.z, w: 0.4, h: 6, d: al.len });
+      // Dim overhead light
+      for (let lz = al.z - al.len/2 + 5; lz < al.z + al.len/2; lz += 10) {
+        const aLight = createMesh(buildBox(0.3, 0.15, 0.3, 1.0, 0.8, 0.5));
+        buildings.push({ mesh: aLight, x: al.x, y: 5.5, z: lz, w: 0.3, h: 0.15, d: 0.3, isSign: true, emissive: 0.6 });
+      }
+    } else {
+      const alWL = createMesh(buildBox(al.len, 6, 0.4, alCol[0], alCol[1], alCol[2]));
+      buildings.push({ mesh: alWL, x: al.x, y: 3, z: al.z - al.w/2, w: al.len, h: 6, d: 0.4 });
+      const alWR = createMesh(buildBox(al.len, 6, 0.4, alCol[0], alCol[1], alCol[2]));
+      buildings.push({ mesh: alWR, x: al.x, y: 3, z: al.z + al.w/2, w: al.len, h: 6, d: 0.4 });
+      for (let lx = al.x - al.len/2 + 5; lx < al.x + al.len/2; lx += 10) {
+        const aLight = createMesh(buildBox(0.3, 0.15, 0.3, 1.0, 0.8, 0.5));
+        buildings.push({ mesh: aLight, x: lx, y: 5.5, z: al.z, w: 0.3, h: 0.15, d: 0.3, isSign: true, emissive: 0.6 });
+      }
+    }
+    // Pipes/ducts on alley walls
+    for (let pi = 0; pi < 3; pi++) {
+      const pipeH = 2 + Math.random() * 3;
+      const pipeY = 1 + Math.random() * 3;
+      const pipeSide = Math.random() > 0.5 ? -1 : 1;
+      if (al.axis === 'z') {
+        const pipe = createMesh(buildBox(0.12, pipeH, 0.12, 0.3, 0.3, 0.32));
+        buildings.push({ mesh: pipe, x: al.x + pipeSide * (al.w/2 - 0.15), y: pipeY + pipeH/2, z: al.z + (Math.random()-0.5)*al.len*0.6, w: 0.12, h: pipeH, d: 0.12, isSign: true });
+      } else {
+        const pipe = createMesh(buildBox(0.12, pipeH, 0.12, 0.3, 0.3, 0.32));
+        buildings.push({ mesh: pipe, x: al.x + (Math.random()-0.5)*al.len*0.6, y: pipeY + pipeH/2, z: al.z + pipeSide * (al.w/2 - 0.15), w: 0.12, h: pipeH, d: 0.12, isSign: true });
+      }
+    }
+  }
+
+  // === LARGE BILLBOARD SCREENS (like Shibuya's famous video screens) ===
+  const billboards = [
+    { x: -38, y: 30, z: -37.5, w: 20, h: 12, facing: 'z' },  // On 109 building
+    { x: 50, y: 60, z: -44.5, w: 25, h: 15, facing: 'z' },    // On Scramble Square
+    { x: 80, y: 40, z: 57.5, w: 18, h: 10, facing: 'z' },     // On Hikarie
+  ];
+  for (const bb of billboards) {
+    const screenW = bb.facing === 'z' ? bb.w : 0.3;
+    const screenD = bb.facing === 'z' ? 0.3 : bb.w;
+    // Screen frame
+    const frame = createMesh(buildBox(screenW + 0.5, bb.h + 0.5, screenD + 0.5, 0.05, 0.05, 0.05));
+    buildings.push({ mesh: frame, x: bb.x, y: bb.y, z: bb.z, w: screenW + 0.5, h: bb.h + 0.5, d: screenD + 0.5, isSign: true });
+    // Glowing screen (cycles through accent colors conceptually)
+    const sc = accentColors[Math.floor(Math.random() * accentColors.length)];
+    const screen = createMesh(buildBox(screenW, bb.h, screenD, sc[0]*0.6, sc[1]*0.6, sc[2]*0.6));
+    buildings.push({ mesh: screen, x: bb.x, y: bb.y, z: bb.z + (bb.facing === 'z' ? 0.2 : 0), w: screenW, h: bb.h, d: screenD, isSign: true, emissive: 0.7 });
   }
 
   // === VENDING MACHINES (along sidewalks) ===
@@ -992,10 +1202,11 @@ function spawnFace() {
 }
 
 // ===== COLLISION =====
-function checkBuildingCollision(nx, nz) {
+function checkBuildingCollision(nx, nz, radius) {
+  const r = radius || 0.4;
   for (const b of buildings) {
     if (b.isSign) continue;
-    const hw = b.w/2 + 0.4, hd = b.d/2 + 0.4;
+    const hw = b.w/2 + r, hd = b.d/2 + r;
     if (nx > b.x-hw && nx < b.x+hw && nz > b.z-hd && nz < b.z+hd) return true;
   }
   return false;
