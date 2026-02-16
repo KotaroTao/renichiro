@@ -149,6 +149,7 @@ canvas { display: block; }
     <span>WASD</span> / <span>Arrow Keys</span> : Move<br>
     <span>Mouse</span> : Look around (click to lock cursor)<br>
     <span>SHIFT</span> : Sprint<br>
+    <span>SPACE</span> : Hop (chain for speed boost!)<br>
     Run from the giant faces! Don't get caught!
   </div>
   <button id="start-btn" onclick="startGame()">START GAME</button>
@@ -165,6 +166,7 @@ canvas { display: block; }
     <div><span class="label">SCORE</span><br><span class="value" id="score-val">0</span></div>
     <div style="margin-top:8px"><span class="label">TIME</span><br><span class="value" id="time-val">0s</span></div>
     <div style="margin-top:8px"><span class="label">FACES</span><br><span class="value" id="face-count">1</span></div>
+    <div style="margin-top:8px"><span class="label">HOP CHAIN</span><br><span class="value" id="hop-chain">0</span></div>
   </div>
   <canvas id="minimap" width="180" height="180"></canvas>
   <div id="warning">WARNING!</div>
@@ -206,6 +208,18 @@ let lastTime = 0;
 let pointerLocked = false;
 let mouseScreenX = window.innerWidth / 2;
 let mouseScreenY = window.innerHeight / 2;
+
+// ===== HOP SYSTEM =====
+let isHopping = false;
+let hopVelocityY = 0;
+let hopChain = 0;          // consecutive well-timed hops
+let hopSpeedBonus = 0;     // extra speed from hop chain
+let lastLandTime = 0;      // when player last landed
+const HOP_FORCE = 0.12;
+const GRAVITY = 0.006;
+const HOP_WINDOW = 400;    // ms window after landing to chain hop
+const HOP_BONUS_PER_CHAIN = 0.03; // speed bonus per chain level
+const MAX_HOP_CHAIN = 8;
 
 // ===== PROXIMITY AUDIO =====
 let bgMusic = null;
@@ -692,12 +706,12 @@ let groundMesh;
 function spawnFace() {
   const angle = Math.random() * Math.PI * 2;
   const dist = 40 + Math.random() * 30;
-  const scale = 1.0 + Math.random() * 0.4; // NEXTBOTS: human-sized
+  const scale = 1.8 + Math.random() * 0.8; // Larger NEXTBOTS
   return {
     x: playerPos.x + Math.cos(angle) * dist,
     y: scale, // Bottom touches ground (quad center at y=scale)
     z: playerPos.z + Math.sin(angle) * dist,
-    speed: 0.03 + Math.random() * 0.02 + score * 0.0001,
+    speed: 0.06 + Math.random() * 0.03 + score * 0.0002,
     scale: scale,
   };
 }
@@ -872,7 +886,10 @@ function update(dt) {
     playerRot.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, playerRot.x));
   }
 
-  const speed = isSprinting ? sprintSpeed : playerSpeed;
+  // Hop speed bonus decays slowly
+  hopSpeedBonus = Math.max(0, hopSpeedBonus - dt * 0.02);
+  const speed = (isSprinting ? sprintSpeed : playerSpeed) + hopSpeedBonus;
+
   let moveX = 0, moveZ = 0;
   if (keys['w'] || keys['arrowup'])    { moveX -= Math.sin(playerRot.y); moveZ -= Math.cos(playerRot.y); }
   if (keys['s'] || keys['arrowdown'])  { moveX += Math.sin(playerRot.y); moveZ += Math.cos(playerRot.y); }
@@ -889,7 +906,17 @@ function update(dt) {
     if (!checkBuildingCollision(playerPos.x, nz)) playerPos.z = nz;
   }
 
-  if (moveX !== 0 || moveZ !== 0) {
+  // Hop physics
+  if (isHopping) {
+    hopVelocityY -= GRAVITY;
+    playerPos.y += hopVelocityY;
+    if (playerPos.y <= 1.7) {
+      playerPos.y = 1.7;
+      isHopping = false;
+      hopVelocityY = 0;
+      lastLandTime = performance.now();
+    }
+  } else if (moveX !== 0 || moveZ !== 0) {
     playerPos.y = 1.7 + Math.sin(survivalTime * 10) * 0.05;
   }
 
@@ -907,7 +934,7 @@ function update(dt) {
     if (dist > 0.1) {
       const dirX = dx / dist;
       const dirZ = dz / dist;
-      const speedMult = 1 + Math.max(0, (30 - dist)) * 0.03;
+      const speedMult = 1 + Math.max(0, (30 - dist)) * 0.05;
       const nx = f.x + dirX * f.speed * speedMult;
       const nz = f.z + dirZ * f.speed * speedMult;
 
@@ -943,9 +970,18 @@ function update(dt) {
     warning.style.opacity = 0;
   }
 
+  // Decay hop chain if too long since last landing
+  if (!isHopping && hopChain > 0 && performance.now() - lastLandTime > HOP_WINDOW * 2) {
+    hopChain = 0;
+    hopSpeedBonus = 0;
+  }
+
   document.getElementById('score-val').textContent = score;
   document.getElementById('time-val').textContent = Math.floor(survivalTime) + 's';
   document.getElementById('face-count').textContent = faces.length;
+  const hopEl = document.getElementById('hop-chain');
+  hopEl.textContent = hopChain > 0 ? 'x' + hopChain : '0';
+  hopEl.style.color = hopChain >= 5 ? '#00ff88' : hopChain >= 3 ? '#ffff00' : '#ff2d7b';
 }
 
 function render() {
@@ -1021,6 +1057,11 @@ function startGame() {
   playerRot = { x: 0, y: 0 };
   score = 0;
   survivalTime = 0;
+  isHopping = false;
+  hopVelocityY = 0;
+  hopChain = 0;
+  hopSpeedBonus = 0;
+  lastLandTime = 0;
   faces = [spawnFace()];
 
   generateCity();
@@ -1060,6 +1101,21 @@ document.addEventListener('pointerlockchange', () => {
 document.addEventListener('keydown', (e) => {
   keys[e.key.toLowerCase()] = true;
   if (e.key === 'Shift') isSprinting = true;
+  if (e.key === ' ' && gameRunning && !isHopping) {
+    e.preventDefault();
+    isHopping = true;
+    // Check if this is a well-timed chain hop
+    const now = performance.now();
+    if (now - lastLandTime < HOP_WINDOW && hopChain > 0) {
+      hopChain = Math.min(hopChain + 1, MAX_HOP_CHAIN);
+    } else if (now - lastLandTime < HOP_WINDOW) {
+      hopChain = 2; // first chain
+    } else {
+      hopChain = 1; // fresh hop, no chain
+    }
+    hopSpeedBonus = hopChain * HOP_BONUS_PER_CHAIN;
+    hopVelocityY = HOP_FORCE;
+  }
 });
 
 document.addEventListener('keyup', (e) => {
